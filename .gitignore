@@ -1,0 +1,6 @@
+.xmake
+build
+go_server/server
+go_server/bili-sms
+bili_plugin.zip
+go_server/cookies.json

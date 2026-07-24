@@ -1,0 +1,309 @@
+import QtQuick 2.12
+import ".."
+
+Item {
+    id: card
+    width: 105
+    height: parent.height
+
+    property string videoTitle: ""
+    property string coverUrl: ""
+    property string upName: ""
+    property string viewCount: ""
+    property string durationText: ""
+    property string bvid: ""
+    property int rankIndex: 0
+    // 多P视频选集角标：可直接传 partCount，也兼容外部显式 showCollection
+    property int partCount: 1
+    property bool showCollection: partCount > 1
+    property bool showRank: false
+    property bool isLastWatched: false
+    property real fontScale: 1.0
+    property real titleScale: 1.0
+    property real subScale: 1.0
+    property bool titleBold: true
+    property bool imageActive: true
+    property bool placeholder: false
+    property bool preferOffscreenPlaceholder: false
+    readonly property bool offscreenPlaceholderActive: preferOffscreenPlaceholder && !placeholder && !isNearViewport()
+    readonly property bool effectivePlaceholder: placeholder || offscreenPlaceholderActive
+    // 标题与UP信息之间的垂直间距（默认 2）
+    property real infoSpacing: 2
+    // 注意：该组件的文本在 Column 中布局，直接改子项 y 通常不会生效
+    property real subYOffset: 0
+    property string coverImageSource: ""
+    property string _loadedCoverUrl: ""
+
+    signal clicked()
+
+    function normalizedCoverSource(url) {
+        if (!url) return ""
+        var s = String(url)
+        if (s.indexOf("data:image/") === 0 || s.indexOf("image://") === 0) return s
+        return "image://bili/size/320x170/" + encodeURIComponent(s)
+    }
+
+    function isNearViewport() {
+        var view = ListView.view
+        if (!view) return true
+        if (!visible) return false
+        if (view.orientation === ListView.Vertical) {
+            return y + height >= view.contentY && y <= view.contentY + view.height
+        }
+        return x + width >= view.contentX && x <= view.contentX + view.width
+    }
+
+    function scheduleCoverLoad() {
+        var requested = coverUrl
+        var shouldLoad = imageActive && !effectivePlaceholder
+        if (!requested) {
+            coverImageSource = ""
+            _loadedCoverUrl = ""
+            return
+        }
+        if (_loadedCoverUrl.length > 0 && _loadedCoverUrl !== requested) {
+            coverImageSource = ""
+            _loadedCoverUrl = ""
+        }
+        if (!shouldLoad) return
+        Qt.callLater(function() {
+            if (imageActive && !effectivePlaceholder && coverUrl === requested) {
+                coverImageSource = normalizedCoverSource(requested)
+                _loadedCoverUrl = requested
+            }
+        })
+    }
+
+    Component.onCompleted: scheduleCoverLoad()
+    onCoverUrlChanged: scheduleCoverLoad()
+    onImageActiveChanged: scheduleCoverLoad()
+    onEffectivePlaceholderChanged: {
+        scheduleCoverLoad()
+        if (effectivePlaceholder) {
+            Qt.callLater(function() {
+                if (card.effectivePlaceholder) effectivePlaceholderTextCanvas.requestPaint()
+            })
+        }
+    }
+
+    Rectangle {
+        id: cardBg
+        anchors.fill: parent
+        radius: 6
+        color: Theme.bgSecondary
+        border.color: card.isLastWatched ? Theme.accent : (mouseArea.pressed ? Theme.primary : "transparent")
+        border.width: card.isLastWatched ? 2 : 1
+
+        Behavior on border.color { ColorAnimation { duration: 80 } }
+
+        // 封面区 (高度约 65%)
+        Rectangle {
+            id: coverContainer
+            width: parent.width - 4
+            height: parent.height * 0.58
+            anchors.top: parent.top
+            anchors.topMargin: 2
+            anchors.horizontalCenter: parent.horizontalCenter
+            radius: 4
+            color: Theme.bgTertiary
+            clip: true
+
+            Image {
+                id: coverImage
+                anchors.fill: parent
+                source: coverImageSource
+                sourceSize: Qt.size(210, 140)
+                cache: true
+                asynchronous: true
+                fillMode: Image.PreserveAspectCrop
+                smooth: true
+                mipmap: true
+
+                opacity: status === Image.Ready ? 1 : 0
+                Behavior on opacity { NumberAnimation { duration: 150 } }
+            }
+
+            // 占位
+            Text {
+                visible: coverImage.status !== Image.Ready
+                text: "📺"
+                font.pixelSize: 18
+                opacity: 0.3
+                anchors.centerIn: parent
+            }
+
+            // 时长
+            Rectangle {
+                visible: !effectivePlaceholder && durationText.length > 0
+                anchors { right: parent.right; bottom: parent.bottom; margins: 3 }
+                width: durationLabel.width + 8
+                height: 14
+                radius: 3
+                color: "#CC000000"
+
+                Text {
+                    id: durationLabel
+                    text: durationText
+                    color: "#FFFFFF"
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 9 * card.fontScale
+                    font.bold: true
+                    anchors.centerIn: parent
+                }
+            }
+
+            // 选集角标（多P视频）
+            Rectangle {
+                visible: !effectivePlaceholder && showCollection
+                anchors { left: parent.left; bottom: parent.bottom; leftMargin: 4; bottomMargin: 4 }
+                width: collectionText.implicitWidth + 10
+                height: 14
+                radius: 6
+                color: Qt.rgba(0, 0, 0, 0.58)
+                border.width: 1
+                border.color: Qt.rgba(1, 1, 1, 0.18)
+                z: 2
+
+                Text {
+                    id: collectionText
+                    text: "选集"
+                    color: "#F8FAFC"
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 8
+                    font.bold: true
+                    anchors.centerIn: parent
+                }
+            }
+
+            // 上次观看标记
+            Rectangle {
+                visible: !effectivePlaceholder && card.isLastWatched
+                anchors { left: parent.left; top: parent.top; margins: 3 }
+                width: lastWatchedLabel.implicitWidth + 8
+                height: 14
+                radius: 7
+                color: Theme.withAlpha(Theme.accent, 0.92)
+                border.width: 1
+                border.color: Theme.withAlpha(Theme.textOnPrimary, 0.28)
+                z: 3
+
+                Text {
+                    id: lastWatchedLabel
+                    anchors.centerIn: parent
+                    text: "上次"
+                    color: Theme.textOnPrimary
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 8
+                    font.bold: true
+                }
+            }
+
+            // 排名
+            Rectangle {
+                visible: !effectivePlaceholder && showRank && rankIndex > 0
+                anchors { left: parent.left; top: parent.top; margins: 3 }
+                width: 16; height: 14
+                radius: 3
+                color: rankIndex <= 3 ? Theme.error : "#CC000000"
+
+                Text {
+                    text: rankIndex
+                    color: "#FFFFFF"
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 9
+                    font.bold: true
+                    anchors.centerIn: parent
+                }
+            }
+        }
+
+        // 信息区
+        Canvas {
+            id: effectivePlaceholderTextCanvas
+            visible: effectivePlaceholder
+            anchors {
+                top: coverContainer.bottom
+                topMargin: 4
+                left: parent.left
+                right: parent.right
+                leftMargin: 5
+                rightMargin: 5
+                bottom: parent.bottom
+                bottomMargin: 3
+            }
+            Component.onCompleted: requestPaint()
+            onVisibleChanged: if (visible) requestPaint()
+            onWidthChanged: requestPaint()
+            onHeightChanged: requestPaint()
+            onPaint: {
+                var ctx = getContext("2d")
+                ctx.clearRect(0, 0, width, height)
+
+                function pill(x, y, w, h, color) {
+                    ctx.fillStyle = color
+                    ctx.beginPath()
+                    ctx.moveTo(x + h / 2, y)
+                    ctx.lineTo(x + w - h / 2, y)
+                    ctx.quadraticCurveTo(x + w, y, x + w, y + h / 2)
+                    ctx.quadraticCurveTo(x + w, y + h, x + w - h / 2, y + h)
+                    ctx.lineTo(x + h / 2, y + h)
+                    ctx.quadraticCurveTo(x, y + h, x, y + h / 2)
+                    ctx.quadraticCurveTo(x, y, x + h / 2, y)
+                    ctx.fill()
+                }
+
+                pill(0, 0, width * 0.92, 8, Theme.withAlpha(Theme.textTertiary, 0.16))
+                pill(0, 11, width * 0.78, 8, Theme.withAlpha(Theme.textTertiary, 0.12))
+                pill(0, 25, width * 0.56, 7, Theme.withAlpha(Theme.textTertiary, 0.10))
+            }
+        }
+
+        Column {
+            visible: !effectivePlaceholder
+            anchors {
+                top: coverContainer.bottom
+                topMargin: 4
+                left: parent.left
+                right: parent.right
+                leftMargin: 5
+                rightMargin: 5
+                bottom: parent.bottom
+                bottomMargin: 3
+            }
+            spacing: infoSpacing
+
+            // 标题
+            Text {
+                width: parent.width
+                text: videoTitle
+                color: Theme.textPrimary
+                font.family: Theme.fontFamily
+                font.pixelSize: 10 * card.fontScale * card.titleScale
+                font.bold: titleBold
+                maximumLineCount: 2
+                wrapMode: Text.Wrap
+                elide: Text.ElideRight
+                lineHeight: 1.15
+            }
+
+            // UP主 + 播放量
+            Text {
+                width: parent.width
+                // 处于 Column 布局中，y 可能会被布局覆盖，保留该属性以兼容需要时的手动布局
+                y: subYOffset
+                text: upName + (viewCount ? " · " + viewCount : "")
+                color: "#7A7A7A"
+                font.family: Theme.fontFamily
+                font.pixelSize: 8 * card.fontScale * card.subScale
+                elide: Text.ElideRight
+            }
+        }
+
+        MouseArea {
+            id: mouseArea
+            anchors.fill: parent
+            enabled: !effectivePlaceholder
+            onClicked: card.clicked()
+        }
+    }
+}

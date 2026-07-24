@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>短信登录</title>
+  <style>
+    html, body {
+      width: 100%;
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+      background: #f5f6fa;
+      color: #111827;
+    }
+
+    body {
+      padding: 12px;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 100%;
+      margin: 0 auto;
+      background: #fff;
+      border-radius: 14px;
+      padding: 16px;
+      box-sizing: border-box;
+      box-shadow: 0 4px 18px rgba(0, 0, 0, 0.08);
+    }
+
+    h2 {
+      margin: 4px 0 14px;
+      text-align: center;
+      font-size: 24px;
+      line-height: 1.2;
+    }
+
+    .field {
+      margin-bottom: 12px;
+    }
+
+    input {
+      width: 100%;
+      height: 50px;
+      padding: 0 12px;
+      border: 1px solid #d1d5db;
+      border-radius: 10px;
+      font-size: 18px;
+      box-sizing: border-box;
+      outline: none;
+    }
+
+    input:focus {
+      border-color: #1677ff;
+      box-shadow: 0 0 0 3px rgba(22, 119, 255, 0.15);
+    }
+
+    /* 验证区域放在手机号输入框下面 */
+    #captcha {
+      width: 100%;
+      min-height: 54px;
+      margin: 8px 0 14px;
+      display: block;
+      overflow: hidden;
+    }
+
+    #captcha > * {
+      max-width: 100% !important;
+    }
+
+    button {
+      width: 100%;
+      height: 50px;
+      border: none;
+      border-radius: 10px;
+      font-size: 18px;
+      font-weight: 600;
+      cursor: pointer;
+      margin-bottom: 12px;
+      color: #fff;
+      background: #1677ff;
+    }
+
+    button:active { opacity: 0.9; }
+
+    #btn-login {
+      background: #111827;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2>短信登录</h2>
+
+    <div class="field">
+      <input id="tel" inputmode="numeric" placeholder="请输入手机号" />
+    </div>
+
+    <div id="captcha"></div>
+
+    <button id="btn-send">发送短信</button>
+
+    <div class="field">
+      <input id="code" inputmode="numeric" placeholder="请输入短信验证码" />
+    </div>
+
+    <button id="btn-login">登录</button>
+  </div>
+
+  <script src="jquery.js"></script>
+  <script src="gt.js"></script>
+  <script>
+    let captchaInfo = null;
+    let captchaObj = null;
+    let captchaKey = null;
+
+    async function initCaptcha() {
+      const res = await fetch('/api/captcha');
+      captchaInfo = await res.json();
+
+      initGeetest({
+        gt: captchaInfo.gt,
+        challenge: captchaInfo.challenge,
+        offline: false,
+        new_captcha: true,
+        product: 'float',
+        width: '100%',
+        https: true
+      }, function (obj) {
+        captchaObj = obj;
+        captchaObj.appendTo('#captcha');
+      });
+    }
+
+    initCaptcha();
+
+    document.getElementById('btn-send').onclick = async () => {
+      const tel = document.getElementById('tel').value.trim();
+      if (!tel) return alert('请输入手机号');
+
+      const result = captchaObj && captchaObj.getValidate ? captchaObj.getValidate() : null;
+      if (!result) return alert('请先完成验证');
+
+      const body = {
+        tel,
+        token: captchaInfo.token,
+        challenge: captchaInfo.challenge,
+        validate: result.geetest_validate,
+        seccode: result.geetest_seccode
+      };
+
+      const resp = await fetch('/api/sms/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+
+      const data = await resp.json();
+      captchaKey = data?.data?.captcha_key;
+      alert('短信发送结果: ' + JSON.stringify(data));
+    };
+
+    document.getElementById('btn-login').onclick = async () => {
+      const tel = document.getElementById('tel').value.trim();
+      const code = document.getElementById('code').value.trim();
+      if (!captchaKey) return alert('请先发送短信');
+
+      const resp = await fetch('/api/login/sms', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tel, code, captcha_key: captchaKey })
+      });
+
+      const data = await resp.json();
+      alert('登录返回: ' + JSON.stringify(data));
+    };
+  </script>
+</body>
+</html>
