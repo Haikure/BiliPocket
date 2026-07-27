@@ -3,6 +3,7 @@
 #include "BiliAsyncUtils.hpp"
 #include "BiliController.h"
 #include "BiliJsonUtils.h"
+#include "BiliListFetch.hpp"
 #include "BiliModels.h"
 #include "BiliNetwork.h"
 
@@ -163,40 +164,38 @@ void BiliSeasonModule::fetchRelatedVideos() {
   controller->m_relatedVideoLoadingBvid = requestKey;
   controller->m_relatedVideoModel->setLoading(true);
 
-  QPointer<BiliController> self(controller);
   const QString currentBvid = controller->m_currentVideo.bvid;
-  controller->m_network->get(
-      "/video/related", params,
-      [self, requestKey, currentBvid](const QJsonObject &data) {
-        if (!self || !self->m_relatedVideoModel) return;
+  BiliListFetch::fetchParsed(
+      controller, BiliListFetch::Via::Network, "/video/related", params,
+      // 丢弃过期响应前先复位 loading
+      [requestKey](BiliController *self) {
+        if (!self->m_relatedVideoModel) return false;
         const QString currentKey = videoRequestKey(self->m_currentVideo);
         if (currentKey != requestKey) {
           if (self->m_relatedVideoLoadingBvid == requestKey) {
             self->m_relatedVideoLoadingBvid.clear();
             self->m_relatedVideoModel->setLoading(false);
           }
-          return;
+          return false;
         }
-
-        biliRunInWorker(
-            self,
-            [data, currentBvid]() {
-              return parseRelatedVideosPayload(data, currentBvid);
-            },
-            [self, requestKey](QVector<VideoItem> items) {
-              if (!self || !self->m_relatedVideoModel) return;
-              if (videoRequestKey(self->m_currentVideo) != requestKey) return;
-
-              self->m_relatedVideoModel->clear();
-              self->m_relatedVideoModel->appendItems(items);
-              self->m_relatedVideoModel->setHasMore(false);
-              self->m_relatedVideoModel->setLoading(false);
-              self->m_relatedVideoBvid = requestKey;
-              self->m_relatedVideoLoadingBvid.clear();
-            });
+        return true;
       },
-      [self, requestKey](int, const QString &) {
-        if (!self || !self->m_relatedVideoModel) return;
+      [currentBvid](const QJsonObject &data) {
+        return parseRelatedVideosPayload(data, currentBvid);
+      },
+      [requestKey](BiliController *self, QVector<VideoItem> items) {
+        if (!self->m_relatedVideoModel) return;
+        if (videoRequestKey(self->m_currentVideo) != requestKey) return;
+
+        self->m_relatedVideoModel->clear();
+        self->m_relatedVideoModel->appendItems(items);
+        self->m_relatedVideoModel->setHasMore(false);
+        self->m_relatedVideoModel->setLoading(false);
+        self->m_relatedVideoBvid = requestKey;
+        self->m_relatedVideoLoadingBvid.clear();
+      },
+      [requestKey](BiliController *self, int, const QString &) {
+        if (!self->m_relatedVideoModel) return;
         if (self->m_relatedVideoLoadingBvid != requestKey) return;
         self->m_relatedVideoModel->setLoading(false);
         self->m_relatedVideoLoadingBvid.clear();
@@ -226,46 +225,45 @@ void BiliSeasonModule::fetchUpSeasonVideos(int page, int pageSize) {
   params["pn"] = QString::number(page);
   params["ps"] = QString::number(pageSize);
 
-  QPointer<BiliController> self(controller);
   const QString ownerName = controller->m_upUserName;
-  controller->apiGet(
-      "/user/season/videos", params,
-      [self, mid, seasonId, page, pageSize, ownerName](const QJsonObject &data) {
-        if (!self || !self->m_upVideoModel) return;
-        if (self->m_upUserMid != mid || self->m_upSelectedSeasonId != seasonId) return;
-        biliRunInWorker(
-            self,
-            [data, mid, seasonId, page, pageSize, ownerName]() {
-              return parseSeasonVideosPayload(data, mid, seasonId, page,
-                                              pageSize, false, ownerName);
-            },
-            [self](ParsedSeasonVideos result) {
-              if (!self || !self->m_upVideoModel) return;
-              if (self->m_upUserMid != result.mid ||
-                  self->m_upSelectedSeasonId != result.seasonId) {
-                return;
-              }
-
-              self->m_upSeasonVideoPage = result.page;
-              self->m_upVideoModel->appendItems(result.items);
-              if (result.totalKnown) self->setUpVideoTotal(result.total);
-              self->m_upSeasonVideoHasMore = result.hasMore;
-              self->m_upVideoModel->setHasMore(result.hasMore);
-              self->m_upVideoModel->setLoading(false);
-
-              if (result.items.isEmpty() && result.page == 1) {
-                self->m_upVideoModel->setErrorMessage("该合集暂无视频");
-              }
-            });
+  BiliListFetch::fetchParsed(
+      controller, BiliListFetch::Via::ApiWithLoading, "/user/season/videos",
+      params,
+      [mid, seasonId](BiliController *self) {
+        if (!self->m_upVideoModel) return false;
+        if (self->m_upUserMid != mid || self->m_upSelectedSeasonId != seasonId)
+          return false;
+        return true;
       },
-      [self, mid, seasonId](int, const QString &msg) {
-        if (!self || !self->m_upVideoModel) return;
+      [mid, seasonId, page, pageSize, ownerName](const QJsonObject &data) {
+        return parseSeasonVideosPayload(data, mid, seasonId, page, pageSize,
+                                        false, ownerName);
+      },
+      [](BiliController *self, ParsedSeasonVideos result) {
+        if (!self->m_upVideoModel) return;
+        if (self->m_upUserMid != result.mid ||
+            self->m_upSelectedSeasonId != result.seasonId) {
+          return;
+        }
+
+        self->m_upSeasonVideoPage = result.page;
+        self->m_upVideoModel->appendItems(result.items);
+        if (result.totalKnown) self->setUpVideoTotal(result.total);
+        self->m_upSeasonVideoHasMore = result.hasMore;
+        self->m_upVideoModel->setHasMore(result.hasMore);
+        self->m_upVideoModel->setLoading(false);
+
+        if (result.items.isEmpty() && result.page == 1) {
+          self->m_upVideoModel->setErrorMessage("该合集暂无视频");
+        }
+      },
+      [mid, seasonId](BiliController *self, int, const QString &msg) {
+        if (!self->m_upVideoModel) return;
         if (self->m_upUserMid != mid || self->m_upSelectedSeasonId != seasonId) return;
         self->m_upVideoModel->setLoading(false);
         self->m_upVideoModel->setErrorMessage(msg);
         emit self->toastMessage(QString("加载合集失败：%1").arg(msg));
-      },
-      true);
+      });
 }
 
 void BiliSeasonModule::fetchUpSeriesVideos(int page, int pageSize) {
@@ -291,49 +289,47 @@ void BiliSeasonModule::fetchUpSeriesVideos(int page, int pageSize) {
   params["pn"] = QString::number(page);
   params["ps"] = QString::number(pageSize);
 
-  QPointer<BiliController> self(controller);
   const QString ownerName = controller->m_upUserName;
-  controller->apiGet(
-      "/user/series/videos", params,
-      [self, mid, seriesId, page, pageSize, ownerName](const QJsonObject &data) {
-        if (!self || !self->m_upVideoModel) return;
+  BiliListFetch::fetchParsed(
+      controller, BiliListFetch::Via::ApiWithLoading, "/user/series/videos",
+      params,
+      [mid, seriesId](BiliController *self) {
+        if (!self->m_upVideoModel) return false;
         if (self->m_upUserMid != mid || self->m_upSelectedSeasonId != seriesId ||
-            !self->m_upSelectedIsSeries) return;
-        biliRunInWorker(
-            self,
-            [data, mid, seriesId, page, pageSize, ownerName]() {
-              return parseSeasonVideosPayload(data, mid, seriesId, page,
-                                              pageSize, false, ownerName);
-            },
-            [self](ParsedSeasonVideos result) {
-              if (!self || !self->m_upVideoModel) return;
-              if (self->m_upUserMid != result.mid ||
-                  self->m_upSelectedSeasonId != result.seasonId ||
-                  !self->m_upSelectedIsSeries) {
-                return;
-              }
-
-              self->m_upSeasonVideoPage = result.page;
-              self->m_upVideoModel->appendItems(result.items);
-              if (result.totalKnown) self->setUpVideoTotal(result.total);
-              self->m_upSeasonVideoHasMore = result.hasMore;
-              self->m_upVideoModel->setHasMore(result.hasMore);
-              self->m_upVideoModel->setLoading(false);
-
-              if (result.items.isEmpty() && result.page == 1) {
-                self->m_upVideoModel->setErrorMessage("该系列暂无视频");
-              }
-            });
+            !self->m_upSelectedIsSeries) return false;
+        return true;
       },
-      [self, mid, seriesId](int, const QString &msg) {
-        if (!self || !self->m_upVideoModel) return;
+      [mid, seriesId, page, pageSize, ownerName](const QJsonObject &data) {
+        return parseSeasonVideosPayload(data, mid, seriesId, page, pageSize,
+                                        false, ownerName);
+      },
+      [](BiliController *self, ParsedSeasonVideos result) {
+        if (!self->m_upVideoModel) return;
+        if (self->m_upUserMid != result.mid ||
+            self->m_upSelectedSeasonId != result.seasonId ||
+            !self->m_upSelectedIsSeries) {
+          return;
+        }
+
+        self->m_upSeasonVideoPage = result.page;
+        self->m_upVideoModel->appendItems(result.items);
+        if (result.totalKnown) self->setUpVideoTotal(result.total);
+        self->m_upSeasonVideoHasMore = result.hasMore;
+        self->m_upVideoModel->setHasMore(result.hasMore);
+        self->m_upVideoModel->setLoading(false);
+
+        if (result.items.isEmpty() && result.page == 1) {
+          self->m_upVideoModel->setErrorMessage("该系列暂无视频");
+        }
+      },
+      [mid, seriesId](BiliController *self, int, const QString &msg) {
+        if (!self->m_upVideoModel) return;
         if (self->m_upUserMid != mid || self->m_upSelectedSeasonId != seriesId ||
             !self->m_upSelectedIsSeries) return;
         self->m_upVideoModel->setLoading(false);
         self->m_upVideoModel->setErrorMessage(msg);
         emit self->toastMessage(QString("加载系列失败：%1").arg(msg));
-      },
-      true);
+      });
 }
 
 void BiliSeasonModule::fetchMoreUpSeasonVideos() {
@@ -359,17 +355,17 @@ void BiliSeasonModule::fetchSeasonVideos(qint64 mid, qint64 seasonId, int page,
   page = qBound(1, page, 9999);
   pageSize = qBound(1, pageSize, 100);
 
-  bool reset = page == 1 || controller->m_seasonVideoMid != mid ||
-               controller->m_seasonVideoSeasonId != seasonId ||
-               controller->m_seasonVideoOldestFirst != oldestFirst;
-  controller->m_seasonVideoMid = mid;
-  controller->m_seasonVideoSeasonId = seasonId;
-  controller->m_seasonVideoOldestFirst = oldestFirst;
+  bool reset = page == 1 || m_seasonVideoMid != mid ||
+               m_seasonVideoSeasonId != seasonId ||
+               m_seasonVideoOldestFirst != oldestFirst;
+  m_seasonVideoMid = mid;
+  m_seasonVideoSeasonId = seasonId;
+  m_seasonVideoOldestFirst = oldestFirst;
 
   if (reset) {
     controller->m_seasonVideoModel->clear();
     controller->m_seasonVideoModel->setHasMore(true);
-    controller->m_seasonVideoHasMore = true;
+    m_seasonVideoHasMore = true;
     controller->setSeasonVideoTotal(0);
   }
 
@@ -384,56 +380,54 @@ void BiliSeasonModule::fetchSeasonVideos(qint64 mid, qint64 seasonId, int page,
   params["ps"] = QString::number(pageSize);
 
   QString ownerName = controller->m_currentVideo.ownerName;
-  QPointer<BiliController> self(controller);
-  controller->apiGet(
-      "/user/season/videos", params,
-      [self, mid, seasonId, page, pageSize, oldestFirst, ownerName](const QJsonObject &data) {
-        if (!self || !self->m_seasonVideoModel) return;
-        if (self->m_seasonVideoMid != mid || self->m_seasonVideoSeasonId != seasonId ||
-            self->m_seasonVideoOldestFirst != oldestFirst) return;
-        biliRunInWorker(
-            self,
-            [data, mid, seasonId, page, pageSize, oldestFirst, ownerName]() {
-              return parseSeasonVideosPayload(data, mid, seasonId, page,
-                                              pageSize, oldestFirst, ownerName);
-            },
-            [self](ParsedSeasonVideos result) {
-              if (!self || !self->m_seasonVideoModel) return;
-              if (self->m_seasonVideoMid != result.mid ||
-                  self->m_seasonVideoSeasonId != result.seasonId ||
-                  self->m_seasonVideoOldestFirst != result.oldestFirst) {
-                return;
-              }
-
-              self->m_seasonVideoPage = result.page;
-              self->m_seasonVideoModel->appendItems(result.items);
-              if (result.totalKnown) self->setSeasonVideoTotal(result.total);
-              self->m_seasonVideoHasMore = result.hasMore;
-              self->m_seasonVideoModel->setHasMore(result.hasMore);
-              self->m_seasonVideoModel->setLoading(false);
-
-              if (result.items.isEmpty() && result.page == 1) {
-                self->m_seasonVideoModel->setErrorMessage("该合集暂无视频");
-              }
-            });
+  BiliListFetch::fetchParsed(
+      controller, BiliListFetch::Via::ApiWithLoading, "/user/season/videos",
+      params,
+      [this, mid, seasonId, oldestFirst](BiliController *self) {
+        if (!self->m_seasonVideoModel) return false;
+        if (m_seasonVideoMid != mid || m_seasonVideoSeasonId != seasonId ||
+            m_seasonVideoOldestFirst != oldestFirst) return false;
+        return true;
       },
-      [self, mid, seasonId, oldestFirst](int, const QString &msg) {
-        if (!self || !self->m_seasonVideoModel) return;
-        if (self->m_seasonVideoMid != mid || self->m_seasonVideoSeasonId != seasonId ||
-            self->m_seasonVideoOldestFirst != oldestFirst) return;
+      [mid, seasonId, page, pageSize, oldestFirst, ownerName](const QJsonObject &data) {
+        return parseSeasonVideosPayload(data, mid, seasonId, page, pageSize,
+                                        oldestFirst, ownerName);
+      },
+      [this](BiliController *self, ParsedSeasonVideos result) {
+        if (!self->m_seasonVideoModel) return;
+        if (m_seasonVideoMid != result.mid ||
+            m_seasonVideoSeasonId != result.seasonId ||
+            m_seasonVideoOldestFirst != result.oldestFirst) {
+          return;
+        }
+
+        m_seasonVideoPage = result.page;
+        self->m_seasonVideoModel->appendItems(result.items);
+        if (result.totalKnown) self->setSeasonVideoTotal(result.total);
+        m_seasonVideoHasMore = result.hasMore;
+        self->m_seasonVideoModel->setHasMore(result.hasMore);
+        self->m_seasonVideoModel->setLoading(false);
+
+        if (result.items.isEmpty() && result.page == 1) {
+          self->m_seasonVideoModel->setErrorMessage("该合集暂无视频");
+        }
+      },
+      [this, mid, seasonId, oldestFirst](BiliController *self, int,
+                                         const QString &msg) {
+        if (!self->m_seasonVideoModel) return;
+        if (m_seasonVideoMid != mid || m_seasonVideoSeasonId != seasonId ||
+            m_seasonVideoOldestFirst != oldestFirst) return;
         self->m_seasonVideoModel->setLoading(false);
         self->m_seasonVideoModel->setErrorMessage(msg);
         emit self->toastMessage(QString("加载合集失败：%1").arg(msg));
-      },
-      true);
+      });
 }
 
 void BiliSeasonModule::fetchMoreSeasonVideos() {
   BiliController *controller = m_controller;
   if (!controller) return;
-  if (!controller->m_seasonVideoHasMore) return;
+  if (!m_seasonVideoHasMore) return;
   if (!controller->m_seasonVideoModel || controller->m_seasonVideoModel->loading()) return;
-  fetchSeasonVideos(controller->m_seasonVideoMid, controller->m_seasonVideoSeasonId,
-                    controller->m_seasonVideoPage + 1, 30,
-                    controller->m_seasonVideoOldestFirst);
+  fetchSeasonVideos(m_seasonVideoMid, m_seasonVideoSeasonId,
+                    m_seasonVideoPage + 1, 30, m_seasonVideoOldestFirst);
 }

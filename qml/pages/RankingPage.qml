@@ -1,4 +1,5 @@
-import QtQuick 2.12
+// reuseItems 需要 QtQuick 2.15（Qt 5.15）
+import QtQuick 2.15
 import BiliPlugin 1.0
 import "../components" as Components
 import ".."
@@ -141,9 +142,10 @@ Rectangle {
         orientation: ListView.Horizontal
         spacing: Theme.spacingMedium
         clip: true
-        cacheBuffer: 640
-        displayMarginBeginning: 160
-        displayMarginEnd: 160
+        reuseItems: true
+        cacheBuffer: Theme.listCacheBuffer
+        displayMarginBeginning: Theme.listDisplayMargin
+        displayMarginEnd: Theme.listDisplayMargin
 
         delegate: Components.VideoCardCompact {
             height: rankList.height

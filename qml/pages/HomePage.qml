@@ -1,4 +1,5 @@
-import QtQuick 2.12
+// reuseItems 需要 QtQuick 2.15（Qt 5.15）
+import QtQuick 2.15
 import BiliPlugin 1.0
 import "../components" as Components
 import ".."
@@ -28,7 +29,6 @@ Rectangle {
     property double lastRecommendRefreshMs: 0
     property bool initialPopularRequested: false
     property bool popularModelAttached: false
-    property bool popularLoadingMore: false
     readonly property bool popularImagesActive: visible && tabIndex === 0
     readonly property bool rankingImagesActive: visible && tabIndex === 1
     readonly property bool profileImagesActive: visible && tabIndex === 3
@@ -118,19 +118,14 @@ Rectangle {
             opacity: visible ? 1 : 0
             Behavior on opacity { NumberAnimation { duration: 120 } }
 
-            ListView {
-            id: popularList
-            anchors.fill: parent
-            anchors.margins: 4
-            model: controller && homePage.popularModelAttached ? controller.feed.popularModel() : null
-            orientation: ListView.Horizontal
-            spacing: 6
-            clip: true
-
-                // 性能优化
-                cacheBuffer: 640
-                displayMarginBeginning: 160
-                displayMarginEnd: 160
+            Components.LoadMoreListView {
+                id: popularList
+                anchors.fill: parent
+                anchors.margins: 4
+                model: controller && homePage.popularModelAttached ? controller.feed.popularModel() : null
+                spacing: 6
+                // 守卫用页面级 isLoading，而非 model.loading
+                loading: controller ? controller.isLoading : false
 
                 delegate: VideoCardCompact {
                     height: popularList.height
@@ -146,13 +141,7 @@ Rectangle {
                     onClicked: homePage.videoSelected(bvid)
                 }
 
-                onAtXEndChanged: {
-                    if (!atXEnd || !controller) return
-                    if (popularList.contentWidth <= popularList.width + 2) return
-                    if (isLoading || homePage.popularLoadingMore || popularList.count <= 0) return
-                    homePage.popularLoadingMore = true
-                    controller.feed.fetchMorePopular()
-                }
+                onLoadMoreRequested: if (controller) controller.feed.fetchMorePopular()
 
                 Row {
                     visible: initialPopularRequested && popularList.count === 0 && isLoading
@@ -192,14 +181,16 @@ Rectangle {
                 id: rankingList
                 anchors.fill: parent
                 anchors.margins: 4
-                model: controller ? controller.feed.rankingModel() : null
+                // 该 Tab 当前不可达（switchTab(1) 直接跳 RankingPage），门控 model 免建 delegate
+                model: controller && homePage.tabIndex === 1 ? controller.feed.rankingModel() : null
                 orientation: ListView.Horizontal
                 spacing: 6
                 clip: true
+                reuseItems: true
 
-                cacheBuffer: 640
-                displayMarginBeginning: 160
-                displayMarginEnd: 160
+                cacheBuffer: Theme.listCacheBuffer
+                displayMarginBeginning: Theme.listDisplayMargin
+                displayMarginEnd: Theme.listDisplayMargin
 
                 delegate: VideoCardCompact {
                     height: rankingList.height
@@ -275,14 +266,11 @@ Rectangle {
                             anchors.margins: 2
                             visible: controller && controller.loggedIn && source != ""
                             source: controller && controller.userFace && homePage.profileImagesActive
-                            ? "image://bili/" + encodeURIComponent(controller.userFace) : ""
+                            ? "image://bili/round/size/112x112/" + encodeURIComponent(controller.userFace) : ""
                             sourceSize: Qt.size(112, 112)
                             cache: true
                             asynchronous: true
                             fillMode: Image.PreserveAspectCrop
-
-                            layer.enabled: true
-                            layer.smooth: true
                         }
 
                         Text {
@@ -643,14 +631,6 @@ Rectangle {
                     }
                 }
             }
-        }
-    }
-
-    Connections {
-        target: controller
-        ignoreUnknownSignals: true
-        function onIsLoadingChanged() {
-            if (!controller || !controller.isLoading) homePage.popularLoadingMore = false
         }
     }
 

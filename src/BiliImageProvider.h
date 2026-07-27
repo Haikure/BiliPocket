@@ -40,6 +40,8 @@ private:
   QImage scaledForRequestedSize(const QImage &image) const;
   static QImage createPlaceholder(int w = 160, int h = 100);
   static bool isValidImageData(const QByteArray &data);
+  static QImage decodeImageData(const QByteArray &data);
+  static QImage roundCropped(const QImage &image);
 };
 
 // ========== 异步图片提供者 ==========

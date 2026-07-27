@@ -1537,10 +1537,28 @@ void UpSeasonListModel::setItems(const QVector<UpSeasonItem> &items)
     emit countChanged();
 }
 
+void UpSeasonListModel::appendItems(const QVector<UpSeasonItem> &items)
+{
+    if (items.isEmpty()) return;
+    beginInsertRows(QModelIndex(), m_items.count(),
+                    m_items.count() + items.count() - 1);
+    m_items.append(items);
+    endInsertRows();
+    emit countChanged();
+}
+
 void UpSeasonListModel::setLoading(bool loading)
 {
     if (m_loading != loading) {
         m_loading = loading;
         emit loadingChanged();
+    }
+}
+
+void UpSeasonListModel::setHasMore(bool hasMore)
+{
+    if (m_hasMore != hasMore) {
+        m_hasMore = hasMore;
+        emit hasMoreChanged();
     }
 }

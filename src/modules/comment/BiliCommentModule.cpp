@@ -2,6 +2,7 @@
 #include "BiliAsyncUtils.hpp"
 #include "BiliController.h"
 #include "BiliJsonUtils.h"
+#include "BiliListFetch.hpp"
 #include "BiliModels.h"
 #include "BiliNetwork.h"
 #include "modules/history/BiliHistoryModule.h"
@@ -362,43 +363,43 @@ void BiliCommentModule::fetchCommentsForContext(const QString &oid, int type,
     params["offset"] = m_commentNextOffset;
   }
 
-  QPointer<BiliController> self(m_controller);
   const int requestPage = page;
   const QString requestKey = requestContextKey;
   const QString requestOid = requestOidString;
   const int requestType = type;
-  m_controller->apiGet(
-      "/video/comments", params,
-      [this, self, requestPage, requestKey, requestOid, requestType](const QJsonObject &data) {
-        if (!self)
-          return;
-        biliRunInWorker(
-            self, [data, requestPage]() {
-              return parseCommentsPayload(data, requestPage);
-            },
-            [this, self, requestKey, requestOid, requestType](ParsedComments result) {
-              if (!self || m_commentPage != result.page || m_commentBvid != requestKey ||
-                  m_commentOid != requestOid || m_commentType != requestType)
-                return;
-              if (result.page == 1) {
-                m_commentFirstPageLoaded = true;
-                emit commentsReadyChanged();
-              }
-              m_commentNextOffset = result.nextOffset;
-              m_commentHasMore = result.hasMore;
-              self->commentListModel()->setTotalCount(result.total);
-              self->commentListModel()->appendItems(result.items);
-              self->commentListModel()->setLoading(false);
-
-              if (result.items.isEmpty() && result.page == 1) {
-                self->commentListModel()->setErrorMessage("暂无评论");
-              }
-            });
+  BiliListFetch::fetchParsed(
+      m_controller, BiliListFetch::Via::Api, "/video/comments", params,
+      BiliListFetch::acceptAlways,
+      [requestPage](const QJsonObject &data) {
+        return parseCommentsPayload(data, requestPage);
       },
-      [this, self, requestKey, requestOid, requestType, silent](int code, const QString &msg) {
-        if (!self || m_commentBvid != requestKey ||
+      [this, requestKey, requestOid, requestType](BiliController *self,
+                                                  ParsedComments result) {
+        if (m_commentPage != result.page || m_commentBvid != requestKey ||
             m_commentOid != requestOid || m_commentType != requestType)
           return;
+        if (result.page == 1) {
+          m_commentFirstPageLoaded = true;
+          emit commentsReadyChanged();
+        }
+        m_commentNextOffset = result.nextOffset;
+        m_commentHasMore = result.hasMore;
+        self->commentListModel()->setTotalCount(result.total);
+        self->commentListModel()->appendItems(result.items);
+        self->commentListModel()->setLoading(false);
+
+        if (result.items.isEmpty() && result.page == 1) {
+          self->commentListModel()->setErrorMessage("暂无评论");
+        }
+      },
+      [this, requestKey, requestOid, requestType, requestPage,
+       silent](BiliController *self, int code, const QString &msg) {
+        if (m_commentBvid != requestKey ||
+            m_commentOid != requestOid || m_commentType != requestType)
+          return;
+        if (m_commentPage == requestPage && m_commentPage > 1) {
+          m_commentPage--;
+        }
         self->commentListModel()->setLoading(false);
         if (code == -404 || msg == "啥都木有") {
           m_commentFirstPageLoaded = true;
@@ -454,47 +455,44 @@ void BiliCommentModule::fetchCommentRepliesForContext(const QString &oid, int ty
   params["ps"] = "20";
   params["pn"] = QString::number(m_commentReplyPage);
 
-  QPointer<BiliController> self(m_controller);
   const qint64 requestRootRpid = rootRpid;
   const int requestPage = m_commentReplyPage;
   const QString requestOid = requestOidString;
   const int requestType = type;
   const QString requestKey = requestContextKey;
-  m_controller->apiGet(
-      "/video/comments/replies", params,
-      [this, self, requestRootRpid, requestPage, requestOid, requestType,
-       requestKey](const QJsonObject &data) {
-        if (!self || m_replyOid != requestOid || m_replyType != requestType ||
-            m_replyContextKey != requestKey)
-          return;
-        biliRunInWorker(
-            self, [data, requestPage]() {
-              return parseCommentRepliesPayload(data, requestPage);
-            },
-            [this, self, requestRootRpid, requestOid, requestType,
-             requestKey](ParsedCommentReplies result) {
-              if (!self || m_replyOid != requestOid || m_replyType != requestType ||
-                  m_replyContextKey != requestKey || m_currentCommentRootRpid != requestRootRpid ||
-                  m_commentReplyPage != result.page)
-                return;
-
-              m_commentReplyHasMore = result.hasMore;
-              emit replyHasMoreChanged();
-
-              if (result.total > 0) {
-                self->commentReplyListModel()->setTotalCount(result.total);
-              } else if (result.items.size() > self->commentReplyListModel()->totalCount()) {
-                self->commentReplyListModel()->setTotalCount(result.items.size());
-              }
-              self->commentReplyListModel()->setItems(result.items);
-              self->commentReplyListModel()->setLoading(false);
-              if (result.items.isEmpty()) {
-                self->commentReplyListModel()->setErrorMessage("暂无回复");
-              }
-            });
+  BiliListFetch::fetchParsed(
+      m_controller, BiliListFetch::Via::Api, "/video/comments/replies", params,
+      [this, requestOid, requestType, requestKey](BiliController *) {
+        return m_replyOid == requestOid && m_replyType == requestType &&
+               m_replyContextKey == requestKey;
       },
-      [this, self, requestOid, requestType, requestKey](int, const QString &msg) {
-        if (!self || m_replyOid != requestOid || m_replyType != requestType ||
+      [requestPage](const QJsonObject &data) {
+        return parseCommentRepliesPayload(data, requestPage);
+      },
+      [this, requestRootRpid, requestOid, requestType,
+       requestKey](BiliController *self, ParsedCommentReplies result) {
+        if (m_replyOid != requestOid || m_replyType != requestType ||
+            m_replyContextKey != requestKey || m_currentCommentRootRpid != requestRootRpid ||
+            m_commentReplyPage != result.page)
+          return;
+
+        m_commentReplyHasMore = result.hasMore;
+        emit replyHasMoreChanged();
+
+        if (result.total > 0) {
+          self->commentReplyListModel()->setTotalCount(result.total);
+        } else if (result.items.size() > self->commentReplyListModel()->totalCount()) {
+          self->commentReplyListModel()->setTotalCount(result.items.size());
+        }
+        self->commentReplyListModel()->setItems(result.items);
+        self->commentReplyListModel()->setLoading(false);
+        if (result.items.isEmpty()) {
+          self->commentReplyListModel()->setErrorMessage("暂无回复");
+        }
+      },
+      [this, requestOid, requestType, requestKey](BiliController *self, int,
+                                                  const QString &msg) {
+        if (m_replyOid != requestOid || m_replyType != requestType ||
             m_replyContextKey != requestKey)
           return;
         m_commentReplyHasMore = false;
@@ -534,46 +532,43 @@ void BiliCommentModule::fetchMoreCommentRepliesForContext(const QString &oid, in
   params["ps"] = "20";
   params["pn"] = QString::number(m_commentReplyPage);
 
-  QPointer<BiliController> self(m_controller);
   const qint64 requestRootRpid = m_currentCommentRootRpid;
   const int requestPage = m_commentReplyPage;
   const QString requestOid = requestOidString;
   const int requestType = type;
   const QString requestKey = requestContextKey;
-  m_controller->apiGet(
-      "/video/comments/replies", params,
-      [this, self, requestRootRpid, requestPage, requestOid, requestType,
-       requestKey](const QJsonObject &data) {
-        if (!self || m_replyOid != requestOid || m_replyType != requestType ||
-            m_replyContextKey != requestKey)
-          return;
-        biliRunInWorker(
-            self, [data, requestPage]() {
-              return parseCommentRepliesPayload(data, requestPage);
-            },
-            [this, self, requestRootRpid, requestOid, requestType,
-             requestKey](ParsedCommentReplies result) {
-              if (!self || m_replyOid != requestOid || m_replyType != requestType ||
-                  m_replyContextKey != requestKey || m_currentCommentRootRpid != requestRootRpid ||
-                  m_commentReplyPage != result.page)
-                return;
-
-              m_commentReplyHasMore = result.hasMore;
-              emit replyHasMoreChanged();
-
-              if (result.total > 0) {
-                self->commentReplyListModel()->setTotalCount(result.total);
-              } else {
-                const int loaded = self->commentReplyListModel()->count() + result.items.size();
-                if (loaded > self->commentReplyListModel()->totalCount())
-                  self->commentReplyListModel()->setTotalCount(loaded);
-              }
-              self->commentReplyListModel()->appendItems(result.items);
-              self->commentReplyListModel()->setLoading(false);
-            });
+  BiliListFetch::fetchParsed(
+      m_controller, BiliListFetch::Via::Api, "/video/comments/replies", params,
+      [this, requestOid, requestType, requestKey](BiliController *) {
+        return m_replyOid == requestOid && m_replyType == requestType &&
+               m_replyContextKey == requestKey;
       },
-      [this, self, requestOid, requestType, requestKey, requestPage](int, const QString &msg) {
-        if (!self || m_replyOid != requestOid || m_replyType != requestType ||
+      [requestPage](const QJsonObject &data) {
+        return parseCommentRepliesPayload(data, requestPage);
+      },
+      [this, requestRootRpid, requestOid, requestType,
+       requestKey](BiliController *self, ParsedCommentReplies result) {
+        if (m_replyOid != requestOid || m_replyType != requestType ||
+            m_replyContextKey != requestKey || m_currentCommentRootRpid != requestRootRpid ||
+            m_commentReplyPage != result.page)
+          return;
+
+        m_commentReplyHasMore = result.hasMore;
+        emit replyHasMoreChanged();
+
+        if (result.total > 0) {
+          self->commentReplyListModel()->setTotalCount(result.total);
+        } else {
+          const int loaded = self->commentReplyListModel()->count() + result.items.size();
+          if (loaded > self->commentReplyListModel()->totalCount())
+            self->commentReplyListModel()->setTotalCount(loaded);
+        }
+        self->commentReplyListModel()->appendItems(result.items);
+        self->commentReplyListModel()->setLoading(false);
+      },
+      [this, requestOid, requestType, requestKey,
+       requestPage](BiliController *self, int, const QString &msg) {
+        if (m_replyOid != requestOid || m_replyType != requestType ||
             m_replyContextKey != requestKey)
           return;
         // 失败时回退页码，避免跳页导致后续页永远加载不到。
@@ -582,8 +577,7 @@ void BiliCommentModule::fetchMoreCommentRepliesForContext(const QString &oid, in
         }
         self->commentReplyListModel()->setLoading(false);
         emit self->toastMessage(QString("回复加载失败：%1").arg(msg));
-      },
-      false);
+      });
 }
 
 void BiliCommentModule::fetchMoreComments() {

@@ -19,6 +19,7 @@ public:
   Q_INVOKABLE void deleteRecentHistoryItem(int row, const QString &business, qint64 kid);
   Q_INVOKABLE void fetchWatchLater(int page = 1, int pageSize = 20);
   Q_INVOKABLE void fetchMoreWatchLater();
+  Q_INVOKABLE void deleteWatchLaterItem(int row, qint64 aid);
   Q_INVOKABLE void addToWatchLater();
   Q_INVOKABLE QObject *recentHistoryModel();
   Q_INVOKABLE QObject *watchLaterModel();

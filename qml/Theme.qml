@@ -41,6 +41,17 @@ Item {
     readonly property color success: "#66BB6A"
     readonly property color warning: "#FFA726"
 
+    // ── 详情页配色 ──
+    readonly property color detailAccent: "#3b82f6"
+    readonly property color detailAccentLight: "#60a5fa"
+    readonly property color detailAccentDark: "#2563eb"
+    readonly property color detailBg: "#0d1117"
+    readonly property color detailSurface: "#1e293b"
+    readonly property color detailTextBright: "#e2e8f0"
+    readonly property color detailTextSecondary: "#94a3b8"
+    // 与 RichText.js 的 DEFAULT_LINK_COLOR 保持一致
+    readonly property string richTextLinkColor: "#60a5fa"
+
     // ── 字体尺寸（320x170 优化）──
     readonly property int fontTiny: 7
     readonly property int fontSmall: 8
@@ -66,6 +77,11 @@ Item {
     readonly property int radiusLarge: 10
     readonly property int radiusXL: 14
     readonly property int radiusRound: 999
+
+    // ── 列表/卡片布局 ──
+    readonly property int cardWidth: 105
+    readonly property int listCacheBuffer: 640
+    readonly property int listDisplayMargin: 160
 
     // ── 触摸最小点击区域 ──
     readonly property int touchMinSize: 28

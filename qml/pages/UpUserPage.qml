@@ -1,7 +1,5 @@
 import QtQuick 2.12
-import QtGraphicalEffects 1.12
 import BiliPlugin 1.0
-import "qrc:/qml/commons"
 import "../components" as Components
 import ".."
 
@@ -27,8 +25,6 @@ Rectangle {
     property int locatedLastWatchedIndex: -1
     property bool upSearchMode: false
     property string upSearchKeyword: ""
-    property bool upSearchLoadingMore: false
-    property bool upDynamicLoadingMore: false
     property real savedUpSearchContentX: 0
     property int upVideoPreloadWindow: 5
     property bool instantReadyTransition: false
@@ -84,21 +80,6 @@ Rectangle {
         })
     }
 
-    function requestUpSearchKeyboard() {
-        let component = qmlCreateComponent("YInputPage")
-        if (Component.Ready === component.status) {
-            var incubator = component.incubateObject(up_search_pop_helper.containerItem)
-            if (incubator.status !== Component.Ready) {
-                incubator.onStatusChanged = function(status) {
-                    if (status === Component.Ready)
-                        up_search_pop_helper.inputPageCreated(incubator.object)
-                }
-            } else {
-                up_search_pop_helper.inputPageCreated(incubator.object)
-            }
-        }
-    }
-
     function upFansMedalLabel() {
         if (!controller || !controller.upFansMedalName) return ""
         var levelText = controller.upFansMedalLevel > 0 ? " Lv" + controller.upFansMedalLevel : ""
@@ -130,8 +111,6 @@ Rectangle {
     function resetUpSearchState() {
         upSearchMode = false
         upSearchKeyword = ""
-        upSearchLoadingMore = false
-        upDynamicLoadingMore = false
         savedUpSearchContentX = 0
         if (controller && controller.up && controller.up.clearUpSearch) controller.up.clearUpSearch()
     }
@@ -148,7 +127,7 @@ Rectangle {
         listView.forceLayout()
         var idx = listView.indexAt(Math.max(0, listView.contentX + 8), Math.max(1, listView.height / 2))
         if (idx < 0) {
-            idx = Math.floor(Math.max(0, listView.contentX) / Math.max(1, 105 + listView.spacing))
+            idx = Math.floor(Math.max(0, listView.contentX) / Math.max(1, Theme.cardWidth + listView.spacing))
         }
         return Math.max(0, Math.min(idx, listView.count - 1))
     }
@@ -371,7 +350,6 @@ Rectangle {
         locatedLastWatchedIndex = -1
         upSearchMode = false
         upSearchKeyword = ""
-        upSearchLoadingMore = false
         savedUpSearchContentX = 0
         skeletonPaintToken += 1
         var hasPreloadedInfo = hasPreloadedUpInfo(midVal)
@@ -531,28 +509,19 @@ Rectangle {
                     border.color: Theme.primary
                     border.width: 2
 
+                    // 圆形裁剪由 image provider 的 round/ 前缀完成，无需 OpacityMask
                     Image {
                         id: avatarImage
                         anchors.fill: parent
                         anchors.margins: 2
+                        sourceSize: Qt.size(120, 120)
                         source: controller && controller.upUserFace
-                            ? "image://bili/" + encodeURIComponent(controller.upUserFace)
+                            ? "image://bili/round/size/120x120/" + encodeURIComponent(controller.upUserFace)
                             : ""
                         fillMode: Image.PreserveAspectCrop
                         smooth: true
                         mipmap: true
                         asynchronous: true
-                        visible: false
-                    }
-
-                    OpacityMask {
-                        anchors.fill: avatarImage
-                        source: avatarImage
-                        maskSource: Rectangle {
-                            width: avatarImage.width
-                            height: avatarImage.height
-                            radius: Math.min(width, height) / 2
-                        }
                     }
                 }
 
@@ -908,7 +877,7 @@ Rectangle {
                         MouseArea {
                             id: searchArea
                             anchors.fill: parent
-                            onClicked: upPage.requestUpSearchKeyboard()
+                            onClicked: upSearchKeyboard.open(upPage.upSearchKeyword)
                         }
                     }
 
@@ -969,6 +938,19 @@ Rectangle {
                         flickableDirection: Flickable.HorizontalFlick
                         boundsBehavior: Flickable.StopAtBounds
                         clip: true
+
+                        // chip 条是 Flickable+Repeater 而非 ListView，照 LoadMoreListView 的 guard 手动接线
+                        property bool loadingMoreSeasons: false
+                        onAtXEndChanged: {
+                            if (!atXEnd || !controller || !controller.up) return
+                            if (contentWidth <= width + 2) return
+                            var seasonModel = controller.up.upSeasonModel()
+                            if (!seasonModel || seasonModel.count <= 0) return
+                            if (loadingMoreSeasons || seasonModel.loading) return
+                            if (seasonModel.hasMore === false) return
+                            loadingMoreSeasons = true
+                            controller.up.fetchMoreUpSeasons()
+                        }
 
                         Row {
                             id: filterRow
@@ -1175,6 +1157,28 @@ Rectangle {
                                     }
                                 }
                             }
+
+                            // 合集分页"加载中"尾部指示
+                            Rectangle {
+                                id: seasonLoadingChip
+                                readonly property var seasonModel: controller && controller.up ? controller.up.upSeasonModel() : null
+                                visible: !!(seasonModel && seasonModel.loading && seasonModel.count > 0)
+                                height: filterStrip.height
+                                width: seasonLoadingText.implicitWidth + 26
+                                radius: height / 2
+                                color: Theme.bgSecondary
+                                border.color: Theme.withAlpha(Theme.primary, 0.25)
+                                border.width: 1
+
+                                Text {
+                                    id: seasonLoadingText
+                                    anchors.centerIn: parent
+                                    text: "加载中…"
+                                    color: Theme.textTertiary
+                                    font.family: Theme.fontFamily
+                                    font.pixelSize: Theme.fontSmall
+                                }
+                            }
                         }
                     }
 
@@ -1184,27 +1188,23 @@ Rectangle {
                     target: controller ? controller.up.upSeasonModel() : null
                     function onLoadingChanged() {
                         if (!target || target.loading) return
+                        filterFlick.loadingMoreSeasons = false
                         upPage.clampScrollState()
                     }
                 }
 
-                ListView {
+                Components.LoadMoreListView {
                     id: upVideoList
                     visible: !upPage.upSearchMode && !upPage.upDynamicMode
                     width: parent.width
                     height: 135
                     anchors.top: filterStrip.bottom
                     anchors.topMargin: Theme.spacingNormal
-                    orientation: ListView.Horizontal
                     spacing: 6
-                    clip: true
-                    cacheBuffer: 640
-                    displayMarginBeginning: 160
-                    displayMarginEnd: 160
                     model: controller ? controller.up.upVideoModel() : null
                     leftMargin: 4
                     rightMargin: 4
-                    property bool _loadingMore: false
+                    // 反向加载（“上次观看”定位后往前翻）用 _loadingPrevious，正向仍走内置 loadingMore
                     property bool _loadingPrevious: false
                     property int _previousCountBeforeLoad: 0
 
@@ -1212,7 +1212,7 @@ Rectangle {
                         if (!controller || !controller.up) return
                         if (!force && !atXBeginning) return
                         if (upVideoList.contentWidth <= upVideoList.width + 2) return
-                        if (upVideoList._loadingPrevious || upVideoList._loadingMore) return
+                        if (upVideoList._loadingPrevious || upVideoList.loadingMore) return
                         if (upVideoList.model && upVideoList.model.loading) return
                         if (!controller.up.canFetchPreviousUpVideos || !controller.up.canFetchPreviousUpVideos()) return
                         upVideoList._loadingPrevious = true
@@ -1231,18 +1231,8 @@ Rectangle {
                     }
                     onContentXChanged: upPage.scheduleUpVideoPreload()
 
-                    // 注意：当列表内容不足以撑满宽度时，atXEnd 会一直为 true，
-                    // 可能导致无限触发“加载更多”并表现为“循环同一列表”。
-                    // 这里增加防抖/条件：仅当确实可横向滚动且未在加载时才触发。
-                    onAtXEndChanged: {
-                        if (!controller) return
-                        if (!atXEnd) return
-                        if (upVideoList.contentWidth <= upVideoList.width + 2) return
-                        if (upVideoList._loadingMore) return
-                        if (upVideoList.model && upVideoList.model.loading) return
-                        if (upVideoList.model && upVideoList.model.hasMore === false) return
-                        upVideoList._loadingMore = true
-                        controller.up.fetchMoreUpVideos()
+                    onLoadMoreRequested: {
+                        if (controller && controller.up) controller.up.fetchMoreUpVideos()
                     }
 
                     delegate: Components.VideoCardCompact {
@@ -1282,7 +1272,7 @@ Rectangle {
                     }
                 }
 
-                ListView {
+                Components.LoadMoreListView {
                     id: upDynamicList
                     visible: !upPage.upSearchMode && upPage.upDynamicMode
                     width: parent.width
@@ -1291,10 +1281,10 @@ Rectangle {
                     anchors.topMargin: Theme.spacingNormal
                     orientation: ListView.Vertical
                     spacing: 5
-                    clip: true
+                    // 纵向小视口：需覆盖横向默认的 cacheBuffer/displayMargin
                     cacheBuffer: 360
                     displayMarginBeginning: 120
-                    displayMarginEnd: 160
+                    displayMarginEnd: Theme.listDisplayMargin
                     model: controller && controller.feed ? controller.feed.upDynamicModel() : null
                     leftMargin: 6
                     rightMargin: 6
@@ -1334,32 +1324,19 @@ Rectangle {
                         }
                     }
 
-                    onAtYEndChanged: {
-                        if (!atYEnd || !controller || !controller.feed) return
-                        if (upDynamicList.contentHeight <= upDynamicList.height + 2) return
-                        if (upPage.upDynamicLoadingMore) return
-                        if (upDynamicList.model && upDynamicList.model.loading) return
-                        if (upDynamicList.model && upDynamicList.model.hasMore === false) return
-                        upPage.upDynamicLoadingMore = true
-                        controller.feed.fetchMoreUpDynamics()
+                    onLoadMoreRequested: {
+                        if (controller && controller.feed) controller.feed.fetchMoreUpDynamics()
                     }
-
-                    onCountChanged: upPage.upDynamicLoadingMore = false
                 }
 
-                ListView {
+                Components.LoadMoreListView {
                     id: upSearchResultList
                     visible: upPage.upSearchMode
                     width: parent.width
                     height: 135
                     anchors.top: videoHeader.bottom
                     anchors.topMargin: Theme.spacingSmall
-                    orientation: ListView.Horizontal
                     spacing: 6
-                    clip: true
-                    cacheBuffer: 640
-                    displayMarginBeginning: 160
-                    displayMarginEnd: 160
                     model: controller && controller.up ? controller.up.upSearchVideoModel() : null
                     leftMargin: 4
                     rightMargin: 4
@@ -1403,18 +1380,11 @@ Rectangle {
                         }
                     }
 
-                    onAtXEndChanged: {
-                        if (!atXEnd || !controller || !controller.up) return
-                        if (upSearchResultList.contentWidth <= upSearchResultList.width + 2) return
-                        if (upPage.upSearchLoadingMore) return
-                        if (upSearchResultList.model && upSearchResultList.model.loading) return
-                        if (upSearchResultList.model && upSearchResultList.model.hasMore === false) return
-                        upPage.upSearchLoadingMore = true
-                        controller.up.searchMoreUpVideos()
+                    onLoadMoreRequested: {
+                        if (controller && controller.up) controller.up.searchMoreUpVideos()
                     }
 
                     onCountChanged: {
-                        upPage.upSearchLoadingMore = false
                         upPage.restoreUpSearchPosition()
                         upPage.scheduleUpVideoPreload()
                     }
@@ -1428,7 +1398,6 @@ Rectangle {
                     target: upVideoList.model
                     function onLoadingChanged() {
                         if (!target || target.loading) return
-                        upVideoList._loadingMore = false
                         upVideoList._loadingPrevious = false
                         upPage.clampScrollState()
                         upPage.tryScrollToLastWatched()
@@ -1436,12 +1405,12 @@ Rectangle {
                     }
                     function onCountChanged() {
                         if (upVideoList._loadingPrevious) {
+                            // prepend 后补偿滚动位置：每张卡片占位 = 卡宽 + spacing
                             var added = Math.max(0, upVideoList.count - upVideoList._previousCountBeforeLoad)
                             if (added > 0) {
-                                upVideoList.contentX += added * (105 + upVideoList.spacing)
+                                upVideoList.contentX += added * (Theme.cardWidth + upVideoList.spacing)
                             }
                         }
-                        upVideoList._loadingMore = false
                         upPage.tryScrollToLastWatched()
                         upPage.scheduleUpVideoPreload()
                     }
@@ -1451,11 +1420,7 @@ Rectangle {
                     target: upDynamicList.model
                     function onLoadingChanged() {
                         if (!target || target.loading) return
-                        upPage.upDynamicLoadingMore = false
                         upPage.clampScrollState()
-                    }
-                    function onCountChanged() {
-                        upPage.upDynamicLoadingMore = false
                     }
                 }
 
@@ -1463,7 +1428,6 @@ Rectangle {
                     target: upSearchResultList.model
                     function onLoadingChanged() {
                         if (!target || target.loading) return
-                        upPage.upSearchLoadingMore = false
                         upPage.restoreUpSearchPosition()
                         upPage.scheduleUpVideoPreload()
                     }
@@ -1514,33 +1478,15 @@ Rectangle {
         }
     }
 
-    YPagePopHelper {
-        id: up_search_pop_helper
-        z: 99
-
-        function inputPageCreated(keyboardPage) {
-            keyboardPage.backButtonClicked.connect(function() {
-                qmlGlobal.inputPageShowing = false
-                keyboardPage.todoDestroy()
-                keyboardPage = null
-            })
-
-            keyboardPage.inputFinished.connect(function(content) {
-                upPage.upSearchKeyword = content.trim()
-                qmlGlobal.inputPageShowing = false
-                keyboardPage.todoDestroy()
-                if (upPage.upSearchKeyword.length > 0) {
-                    upPage.doUpSearch()
-                }
-            })
-
-            keyboardPage.enterText(upPage.upSearchKeyword)
-            keyboardPage.show()
-            qmlGlobal.inputPageShowing = true
-        }
-
-        isShowing: qmlGlobal.inputPageShowing
+    Components.VirtualKeyboardInput {
+        id: upSearchKeyboard
         objectName: "from_UpUserPage.qml"
+        onAccepted: {
+            upPage.upSearchKeyword = content.trim()
+            if (upPage.upSearchKeyword.length > 0) {
+                upPage.doUpSearch()
+            }
+        }
     }
 
     Item {
@@ -1601,111 +1547,49 @@ Rectangle {
                     }
                 }
 
-                Canvas {
+                Components.SkeletonPill {
                     width: parent.width - 96
                     height: 58
                     anchors.verticalCenter: parent.verticalCenter
-                    property int paintToken: upPage.skeletonPaintToken
-                    Component.onCompleted: requestPaint()
-                    onPaintTokenChanged: requestPaint()
-                    onVisibleChanged: if (visible) requestPaint()
-                    onWidthChanged: requestPaint()
-                    onHeightChanged: requestPaint()
-                    onPaint: {
-                        var ctx = getContext("2d")
-                        ctx.clearRect(0, 0, width, height)
-                        function pill(x, y, w, h, color) {
-                            ctx.fillStyle = color
-                            ctx.beginPath()
-                            ctx.moveTo(x + h / 2, y)
-                            ctx.lineTo(x + w - h / 2, y)
-                            ctx.quadraticCurveTo(x + w, y, x + w, y + h / 2)
-                            ctx.quadraticCurveTo(x + w, y + h, x + w - h / 2, y + h)
-                            ctx.lineTo(x + h / 2, y + h)
-                            ctx.quadraticCurveTo(x, y + h, x, y + h / 2)
-                            ctx.quadraticCurveTo(x, y, x + h / 2, y)
-                            ctx.fill()
-                        }
-                        pill(0, 4, width * 0.72, 12, Theme.withAlpha(Theme.textSecondary, 0.22))
-                        pill(width * 0.76, 4, width * 0.22, 12, Theme.withAlpha(Theme.primary, 0.16))
-                        pill(0, 30, 40, 18, Theme.withAlpha(Theme.primary, 0.20))
-                        pill(48, 30, 58, 18, Theme.withAlpha(Theme.textSecondary, 0.16))
-                    }
+                    paintToken: upPage.skeletonPaintToken
+                    // x/w ≤1 为宽度比例，>1 为绝对像素
+                    pills: [
+                        { x: 0, y: 4, w: 0.72, h: 12, color: Theme.withAlpha(Theme.textSecondary, 0.22) },
+                        { x: 0.76, y: 4, w: 0.22, h: 12, color: Theme.withAlpha(Theme.primary, 0.16) },
+                        { x: 0, y: 30, w: 40, h: 18, color: Theme.withAlpha(Theme.primary, 0.20) },
+                        { x: 48, y: 30, w: 58, h: 18, color: Theme.withAlpha(Theme.textSecondary, 0.16) }
+                    ]
                 }
             }
 
-            Canvas {
+            Rectangle {
                 width: parent.width - Theme.spacingLarge * 2
                 height: 44
                 anchors.horizontalCenter: parent.horizontalCenter
-                property int paintToken: upPage.skeletonPaintToken
-                Component.onCompleted: requestPaint()
-                onPaintTokenChanged: requestPaint()
-                onVisibleChanged: if (visible) requestPaint()
-                onWidthChanged: requestPaint()
-                onHeightChanged: requestPaint()
-                onPaint: {
-                    var ctx = getContext("2d")
-                    ctx.clearRect(0, 0, width, height)
-                    function pill(x, y, w, h, color) {
-                        ctx.fillStyle = color
-                        ctx.beginPath()
-                        ctx.moveTo(x + h / 2, y)
-                        ctx.lineTo(x + w - h / 2, y)
-                        ctx.quadraticCurveTo(x + w, y, x + w, y + h / 2)
-                        ctx.quadraticCurveTo(x + w, y + h, x + w - h / 2, y + h)
-                        ctx.lineTo(x + h / 2, y + h)
-                        ctx.quadraticCurveTo(x, y + h, x, y + h / 2)
-                        ctx.quadraticCurveTo(x, y, x + h / 2, y)
-                        ctx.fill()
-                    }
-                    ctx.fillStyle = Theme.bgSecondary
-                    ctx.beginPath()
-                    ctx.moveTo(10, 0)
-                    ctx.lineTo(width - 10, 0)
-                    ctx.quadraticCurveTo(width, 0, width, 10)
-                    ctx.lineTo(width, height - 10)
-                    ctx.quadraticCurveTo(width, height, width - 10, height)
-                    ctx.lineTo(10, height)
-                    ctx.quadraticCurveTo(0, height, 0, height - 10)
-                    ctx.lineTo(0, 10)
-                    ctx.quadraticCurveTo(0, 0, 10, 0)
-                    ctx.fill()
-                    pill(12, 11, width * 0.78, 8, Theme.withAlpha(Theme.textSecondary, 0.18))
-                    pill(12, 26, width * 0.46, 8, Theme.withAlpha(Theme.textSecondary, 0.13))
+                radius: 10
+                color: Theme.bgSecondary
+
+                Components.SkeletonPill {
+                    anchors.fill: parent
+                    paintToken: upPage.skeletonPaintToken
+                    pills: [
+                        { x: 12, y: 11, w: 0.78, h: 8, color: Theme.withAlpha(Theme.textSecondary, 0.18) },
+                        { x: 12, y: 26, w: 0.46, h: 8, color: Theme.withAlpha(Theme.textSecondary, 0.13) }
+                    ]
                 }
             }
 
-            Canvas {
+            Components.SkeletonPill {
                 width: parent.width - Theme.spacingLarge * 2
                 height: 32
                 anchors.horizontalCenter: parent.horizontalCenter
-                property int paintToken: upPage.skeletonPaintToken
-                Component.onCompleted: requestPaint()
-                onPaintTokenChanged: requestPaint()
-                onVisibleChanged: if (visible) requestPaint()
-                onWidthChanged: requestPaint()
-                onHeightChanged: requestPaint()
-                onPaint: {
-                    var ctx = getContext("2d")
-                    ctx.clearRect(0, 0, width, height)
-                    function pill(x, y, w, h, color) {
-                        ctx.fillStyle = color
-                        ctx.beginPath()
-                        ctx.moveTo(x + h / 2, y)
-                        ctx.lineTo(x + w - h / 2, y)
-                        ctx.quadraticCurveTo(x + w, y, x + w, y + h / 2)
-                        ctx.quadraticCurveTo(x + w, y + h, x + w - h / 2, y + h)
-                        ctx.lineTo(x + h / 2, y + h)
-                        ctx.quadraticCurveTo(x, y + h, x, y + h / 2)
-                        ctx.quadraticCurveTo(x, y, x + h / 2, y)
-                        ctx.fill()
-                    }
-                    pill(0, 0, width * 0.26, 10, Theme.withAlpha(Theme.textPrimary, 0.18))
-                    pill(0, 18, 52, 14, Theme.withAlpha(Theme.primary, 0.20))
-                    pill(60, 18, 78, 14, Theme.withAlpha(Theme.textSecondary, 0.14))
-                    pill(146, 18, 68, 14, Theme.withAlpha(Theme.textSecondary, 0.12))
-                }
+                paintToken: upPage.skeletonPaintToken
+                pills: [
+                    { x: 0, y: 0, w: 0.26, h: 10, color: Theme.withAlpha(Theme.textPrimary, 0.18) },
+                    { x: 0, y: 18, w: 52, h: 14, color: Theme.withAlpha(Theme.primary, 0.20) },
+                    { x: 60, y: 18, w: 78, h: 14, color: Theme.withAlpha(Theme.textSecondary, 0.14) },
+                    { x: 146, y: 18, w: 68, h: 14, color: Theme.withAlpha(Theme.textSecondary, 0.12) }
+                ]
             }
 
             Row {

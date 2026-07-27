@@ -32,9 +32,11 @@ Rectangle {
 
     function show(message, duration) {
         if (!duration) duration = 2000;
+        // 先停掉上一条的淡出动画，否则其 onFinished 会立刻隐藏新 toast
+        hideAnim.stop();
         toastText.text = message;
         toast.visible = true;
-        showAnim.start();
+        showAnim.restart();
         hideTimer.interval = duration;
         hideTimer.restart();
     }

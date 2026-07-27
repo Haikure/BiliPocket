@@ -2,6 +2,7 @@
 #include "BiliAsyncUtils.hpp"
 #include "BiliController.h"
 #include "BiliJsonUtils.h"
+#include "BiliListFetch.hpp"
 #include "BiliModels.h"
 #include "BiliNetwork.h"
 #include "modules/history/BiliHistoryModule.h"
@@ -105,6 +106,68 @@ void BiliFavoriteModule::resetLoadingState() {
   m_coinStatusLoadingAid = 0;
   m_likeStatusLoadingAid = 0;
   m_watchLaterStatusLoadingAid = 0;
+  // 作废在途的封面回调
+  m_coverGeneration++;
+  m_coverQueue.clear();
+}
+
+// ====== 收藏夹封面队列 ======
+
+void BiliFavoriteModule::startFolderCoverQueue(QVector<qint64> mediaIds) {
+  m_coverGeneration++;
+  m_coverQueue = std::move(mediaIds);
+
+  constexpr int kMaxConcurrent = 2;
+  for (int i = 0; i < kMaxConcurrent; ++i) {
+    fetchNextFolderCover();
+  }
+}
+
+void BiliFavoriteModule::fetchNextFolderCover() {
+  if (m_coverQueue.isEmpty())
+    return;
+
+  const qint64 mediaId = m_coverQueue.takeFirst();
+  const int generation = m_coverGeneration;
+
+  QMap<QString, QString> params;
+  params["media_id"] = QString::number(mediaId);
+  params["pn"] = "1";
+  params["ps"] = "1";
+  params["order"] = "mtime";
+  params["type"] = "0";
+
+  QPointer<BiliController> self(m_controller);
+  m_controller->m_network->get(
+      "/fav/resource/list", params,
+      [self, mediaId, generation](const QJsonObject &data) {
+        if (!self)
+          return;
+        BiliFavoriteModule *module = self->favoriteModule();
+        if (!module || module->m_coverGeneration != generation)
+          return;
+
+        QJsonArray medias = data.value("medias").toArray();
+        if (!medias.isEmpty() && self->m_favoriteFolderModel) {
+          const QString cover =
+              medias.first().toObject().value("cover").toString();
+          if (!cover.isEmpty()) {
+            self->m_favoriteFolderModel->updateCover(mediaId, cover);
+          }
+        }
+        module->fetchNextFolderCover();
+      },
+      [self, mediaId, generation](int code, const QString &msg) {
+        if (!self)
+          return;
+        BiliFavoriteModule *module = self->favoriteModule();
+        if (!module || module->m_coverGeneration != generation)
+          return;
+        // 单个封面失败不打断队列
+        qWarning() << "[BiliFav] Folder cover fetch failed:" << mediaId
+                   << code << msg;
+        module->fetchNextFolderCover();
+      });
 }
 
 // ====== API: 收藏夹 ======
@@ -122,58 +185,36 @@ void BiliFavoriteModule::fetchFavoriteFolders() {
   QMap<QString, QString> params;
   params["mid"] = QString::number(m_controller->m_userId);
 
-  QPointer<BiliController> self(m_controller);
-  m_controller->apiGet(
-      "/fav/folder/list", params,
-      [self](const QJsonObject &data) {
-        if (!self || !self->m_favoriteFolderModel)
+  BiliListFetch::fetchParsed(
+      m_controller, BiliListFetch::Via::ApiWithLoading, "/fav/folder/list",
+      params,
+      [](BiliController *self) { return self->m_favoriteFolderModel != nullptr; },
+      [](const QJsonObject &data) { return parseFavoriteFoldersPayload(data); },
+      [](BiliController *self, QVector<FavoriteFolderItem> items) {
+        if (!self->m_favoriteFolderModel)
           return;
-        biliRunInWorker(
-            self, [data]() { return parseFavoriteFoldersPayload(data); },
-            [self](QVector<FavoriteFolderItem> items) {
-              if (!self || !self->m_favoriteFolderModel)
-                return;
 
-              self->m_favoriteFolderModel->setItems(items);
-              self->m_favoriteFolderModel->setLoading(false);
+        self->m_favoriteFolderModel->setItems(items);
+        self->m_favoriteFolderModel->setLoading(false);
 
-              for (const FavoriteFolderItem &folder : items) {
-                QMap<QString, QString> p;
-                qint64 mediaId = folder.id > 0 ? folder.id : folder.fid;
-                if (mediaId <= 0) continue;
-                p["media_id"] = QString::number(mediaId);
-                p["pn"] = "1";
-                p["ps"] = "1";
-                p["order"] = "mtime";
-                p["type"] = "0";
+        QVector<qint64> coverIds;
+        coverIds.reserve(items.size());
+        for (const FavoriteFolderItem &folder : items) {
+          const qint64 mediaId = folder.id > 0 ? folder.id : folder.fid;
+          if (mediaId > 0) coverIds.append(mediaId);
+        }
+        if (BiliFavoriteModule *module = self->favoriteModule()) {
+          module->startFolderCoverQueue(coverIds);
+        }
 
-                QPointer<BiliController> self2(self);
-                self->m_network->get(
-                    "/fav/resource/list", p,
-                    [self2, mediaId](const QJsonObject &data2) {
-                      if (!self2) return;
-                      QJsonArray medias = data2.value("medias").toArray();
-                      if (!medias.isEmpty()) {
-                        QJsonObject first = medias.first().toObject();
-                        QString cover = first.value("cover").toString();
-                        if (!cover.isEmpty()) {
-                          self2->m_favoriteFolderModel->updateCover(mediaId, cover);
-                        }
-                      }
-                    },
-                    nullptr);
-              }
-
-              if (items.isEmpty()) {
-                emit self->toastMessage("暂无收藏夹");
-              }
-            });
+        if (items.isEmpty()) {
+          emit self->toastMessage("暂无收藏夹");
+        }
       },
-      [this](int, const QString &msg) {
-        m_controller->m_favoriteFolderModel->setLoading(false);
-        emit m_controller->toastMessage(QString("收藏夹加载失败：%1").arg(msg));
-      },
-      true);
+      [](BiliController *self, int, const QString &msg) {
+        self->m_favoriteFolderModel->setLoading(false);
+        emit self->toastMessage(QString("收藏夹加载失败：%1").arg(msg));
+      });
 }
 
 void BiliFavoriteModule::fetchFavoriteItems(qint64 mediaId, int page, int pageSize) {
@@ -203,41 +244,40 @@ void BiliFavoriteModule::fetchFavoriteItems(qint64 mediaId, int page, int pageSi
   params["order"] = "mtime";
   params["type"] = "0";
 
-  QPointer<BiliController> self(m_controller);
   const qint64 requestMediaId = mediaId;
   const int requestPage = page;
-  m_controller->apiGet(
-      "/fav/resource/list", params,
-      [this, self, requestMediaId, requestPage](const QJsonObject &data) {
-        if (!self || !self->m_favoriteItemModel)
+  BiliListFetch::fetchParsed(
+      m_controller, BiliListFetch::Via::ApiWithLoading, "/fav/resource/list",
+      params,
+      [](BiliController *self) { return self->m_favoriteItemModel != nullptr; },
+      [requestMediaId, requestPage](const QJsonObject &data) {
+        return parseFavoriteItemsPayload(data, requestMediaId, requestPage);
+      },
+      [this](BiliController *self, ParsedFavoriteItems result) {
+        if (!self->m_favoriteItemModel ||
+            m_currentFavoriteId != result.mediaId ||
+            m_favoritePage != result.page) {
           return;
-        biliRunInWorker(
-            self,
-            [data, requestMediaId, requestPage]() {
-              return parseFavoriteItemsPayload(data, requestMediaId, requestPage);
-            },
-            [this, self](ParsedFavoriteItems result) {
-              if (!self || !self->m_favoriteItemModel ||
-                  m_currentFavoriteId != result.mediaId ||
-                  m_favoritePage != result.page) {
-                return;
-              }
+        }
 
-              self->m_favoriteItemModel->appendItems(result.items);
-              self->m_favoriteItemModel->setHasMore(result.hasMore);
-              self->m_favoriteItemModel->setLoading(false);
+        self->m_favoriteItemModel->appendItems(result.items);
+        self->m_favoriteItemModel->setHasMore(result.hasMore);
+        self->m_favoriteItemModel->setLoading(false);
 
-              if (result.items.isEmpty() && result.page == 1) {
-                self->m_favoriteItemModel->setErrorMessage("收藏夹为空");
-              }
-            });
+        if (result.items.isEmpty() && result.page == 1) {
+          self->m_favoriteItemModel->setErrorMessage("收藏夹为空");
+        }
       },
-      [this](int, const QString &msg) {
-        m_controller->m_favoriteItemModel->setLoading(false);
-        m_controller->m_favoriteItemModel->setErrorMessage(msg);
-        emit m_controller->toastMessage(QString("收藏夹加载失败：%1").arg(msg));
-      },
-      true);
+      [this, requestMediaId, requestPage](BiliController *self, int,
+                                          const QString &msg) {
+        if (m_currentFavoriteId == requestMediaId &&
+            m_favoritePage == requestPage && m_favoritePage > 1) {
+          m_favoritePage--;
+        }
+        self->m_favoriteItemModel->setLoading(false);
+        self->m_favoriteItemModel->setErrorMessage(msg);
+        emit self->toastMessage(QString("收藏夹加载失败：%1").arg(msg));
+      });
 }
 
 void BiliFavoriteModule::fetchMoreFavoriteItems() {

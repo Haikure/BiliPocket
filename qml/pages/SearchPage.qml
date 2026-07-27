@@ -1,6 +1,5 @@
 import QtQuick 2.12
 import BiliPlugin 1.0
-import "qrc:/qml/commons"
 import "../components" as Components
 import ".."
 
@@ -17,21 +16,13 @@ Rectangle {
     signal backClicked()
     signal videoSelected(string bvid)
 
-    // ═══════════════════════════════════════════════════════════
-    // 虚拟键盘调用
-    // ═══════════════════════════════════════════════════════════
-    function requestKeyboard() {
-        let component = qmlCreateComponent("YInputPage");
-        if (Component.Ready === component.status) {
-            var incubator = component.incubateObject(id_page_pop_helper.containerItem);
-            if (incubator.status !== Component.Ready) {
-                incubator.onStatusChanged = function(status) {
-                    if (status === Component.Ready)
-                        id_page_pop_helper.inputPageCreated(incubator.object);
-                };
-            } else {
-                id_page_pop_helper.inputPageCreated(incubator.object);
-            }
+    // 虚拟键盘弹层
+    Components.VirtualKeyboardInput {
+        id: searchKeyboard
+        objectName: "from_SearchPage.qml"
+        onAccepted: {
+            searchInput.text = content.trim()
+            if (searchInput.text.length > 0) doSearch()
         }
     }
 
@@ -181,7 +172,7 @@ Rectangle {
                     anchors.rightMargin: (searchInput.text.length > 0 ? 26 : 0) - 4
                     anchors.topMargin: -6
                     anchors.bottomMargin: -6
-                    onClicked: requestKeyboard()
+                    onClicked: searchKeyboard.open(searchInput.text)
                 }
             }
 
@@ -236,7 +227,6 @@ Rectangle {
     // ═══════════════════════════════════════════════════════════
     property bool showResults: false
     readonly property bool resultImagesActive: visible && showResults
-    property bool searchLoadingMore: false
     property real savedResultContentX: (rootRef && rootRef.searchSavedResultX > 0) ? rootRef.searchSavedResultX : 0
 
     onSavedResultContentXChanged: {
@@ -538,7 +528,7 @@ Rectangle {
     // ═══════════════════════════════════════════════════════════
     // 搜索结果
     // ═══════════════════════════════════════════════════════════
-    ListView {
+    Components.LoadMoreListView {
         id: searchResultList
         visible: showResults
         anchors {
@@ -549,13 +539,10 @@ Rectangle {
             margins: 6
         }
         model: controller ? controller.search.searchModel() : null
-        orientation: ListView.Horizontal
         spacing: 10
-        clip: true
         boundsBehavior: Flickable.StopAtBounds
-        cacheBuffer: 640
-        displayMarginBeginning: 160
-        displayMarginEnd: 160
+        // 守卫用 controller.isLoading，而非 model.loading
+        loading: controller ? controller.isLoading : false
 
         delegate: Components.VideoCardCompact {
             height: searchResultList.height
@@ -600,16 +587,9 @@ Rectangle {
             }
         }
 
-        onAtXEndChanged: {
-            if (!atXEnd || !controller) return
-            if (searchResultList.contentWidth <= searchResultList.width + 2) return
-            if (searchPage.searchLoadingMore || controller.isLoading) return
-            searchPage.searchLoadingMore = true
-            controller.search.searchMore()
-        }
+        onLoadMoreRequested: if (controller) controller.search.searchMore()
 
         onCountChanged: {
-            searchPage.searchLoadingMore = false
             if (searchPage.showResults) searchPage.restoreSearchPosition();
         }
 
@@ -673,35 +653,6 @@ Rectangle {
         }
     }
 
-    YPagePopHelper {
-        id: id_page_pop_helper
-        z: 99
-
-        function inputPageCreated(keyboardPage) {
-            keyboardPage.backButtonClicked.connect(function() {
-                qmlGlobal.inputPageShowing = false;
-                keyboardPage.todoDestroy();
-                keyboardPage = null;
-            });
-
-            keyboardPage.inputFinished.connect(function(content) {
-                searchInput.text = content.trim();
-                qmlGlobal.inputPageShowing = false;
-                keyboardPage.todoDestroy();
-                if (searchInput.text.length > 0) {
-                    doSearch();
-                }
-            });
-
-            keyboardPage.enterText(searchInput.text);
-            keyboardPage.show();
-            qmlGlobal.inputPageShowing = true;
-        }
-
-        isShowing: qmlGlobal.inputPageShowing
-        objectName: "from_SearchPage.qml"
-    }
-
     // ═══════════════════════════════════════════════════════════
     // 加载指示器
     // ═══════════════════════════════════════════════════════════
@@ -710,14 +661,6 @@ Rectangle {
         running: controller ? controller.isLoading : false
         onCancelRequested: {
             if (controller) controller.cancelAll();
-        }
-    }
-
-    Connections {
-        target: controller
-        ignoreUnknownSignals: true
-        function onIsLoadingChanged() {
-            if (!controller || !controller.isLoading) searchPage.searchPage.searchLoadingMore = false
         }
     }
 

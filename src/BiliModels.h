@@ -583,6 +583,7 @@ class UpSeasonListModel : public QAbstractListModel
     Q_OBJECT
     Q_PROPERTY(int count READ count NOTIFY countChanged)
     Q_PROPERTY(bool loading READ loading NOTIFY loadingChanged)
+    Q_PROPERTY(bool hasMore READ hasMore NOTIFY hasMoreChanged)
 
 public:
     enum Roles {
@@ -602,16 +603,21 @@ public:
 
     int count() const { return m_items.count(); }
     bool loading() const { return m_loading; }
+    bool hasMore() const { return m_hasMore; }
 
     Q_INVOKABLE void clear();
     void setItems(const QVector<UpSeasonItem> &items);
+    void appendItems(const QVector<UpSeasonItem> &items);
     void setLoading(bool loading);
+    void setHasMore(bool hasMore);
 
 signals:
     void countChanged();
     void loadingChanged();
+    void hasMoreChanged();
 
 private:
     QVector<UpSeasonItem> m_items;
     bool m_loading = false;
+    bool m_hasMore = false;
 };

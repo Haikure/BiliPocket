@@ -2,6 +2,7 @@
 #include "BiliAsyncUtils.hpp"
 #include "BiliController.h"
 #include "BiliJsonUtils.h"
+#include "BiliListFetch.hpp"
 #include "BiliModels.h"
 #include "BiliNetwork.h"
 #include "modules/history/BiliHistoryModule.h"
@@ -110,26 +111,16 @@ void BiliSearchModule::fetchHotSearch() {
   QMap<QString, QString> params;
   params["limit"] = "10";
 
-  QPointer<BiliController> self(m_controller);
-  m_controller->network()->get(
-      "/hot/search", params,
-      [self](const QJsonObject &data) {
-        if (!self)
-          return;
-        biliRunInWorker(
-            self, [data]() { return parseSearchHotPayload(data); },
-            [self](QVector<HotSearchItem> items) {
-              if (!self)
-                return;
-              self->hotSearchListModel()->setItems(items);
-              self->hotSearchListModel()->setLoading(false);
-            });
+  BiliListFetch::fetchParsed(
+      m_controller, BiliListFetch::Via::Network, "/hot/search", params,
+      BiliListFetch::acceptAlways,
+      [](const QJsonObject &data) { return parseSearchHotPayload(data); },
+      [](BiliController *self, QVector<HotSearchItem> items) {
+        self->hotSearchListModel()->setItems(items);
+        self->hotSearchListModel()->setLoading(false);
       },
-      [self](int code, const QString &msg) {
+      [](BiliController *self, int code, const QString &msg) {
         Q_UNUSED(code)
-        if (!self)
-          return;
-
         self->hotSearchListModel()->setLoading(false);
         emit self->toastMessage(QString("热搜加载失败：%1").arg(msg));
       });
@@ -176,43 +167,42 @@ void BiliSearchModule::search(const QString &keyword, int page) {
   params["keyword"] = m_searchKeyword;
   params["page"] = QString::number(page);
 
-  QPointer<BiliController> self(m_controller);
   SearchResultModel *searchModel = m_controller->searchListModel();
   const QString requestKeyword = m_searchKeyword;
   const int requestPage = m_searchPage;
 
-  m_controller->network()->get(
-      "/search", params,
-      [this, self, searchModel, requestKeyword, requestPage](const QJsonObject &data) {
-        if (!self || !searchModel)
-          return;
-        biliRunInWorker(
-            self,
-            [data, requestKeyword, requestPage]() {
-              return parseSearchPayload(data, requestKeyword, requestPage);
-            },
-            [this, self, searchModel](ParsedSearchResults result) {
-              if (!self || !searchModel || m_searchKeyword != result.keyword ||
-                  m_searchPage != result.page) {
-                return;
-              }
-
-              searchModel->appendItems(result.items);
-              searchModel->setHasMore(!result.items.isEmpty());
-              searchModel->setLoading(false);
-              self->setIsLoading(false);
-
-              if (result.items.isEmpty() && result.page == 1) {
-                searchModel->setErrorMessage(
-                    QString("未找到%1相关视频").arg(result.keyword));
-              }
-            });
+  BiliListFetch::fetchParsed(
+      m_controller, BiliListFetch::Via::Network, "/search", params,
+      [searchModel](BiliController *) { return searchModel != nullptr; },
+      [requestKeyword, requestPage](const QJsonObject &data) {
+        return parseSearchPayload(data, requestKeyword, requestPage);
       },
-      [self, searchModel](int code, const QString &msg) {
+      [this, searchModel](BiliController *self, ParsedSearchResults result) {
+        if (!searchModel || m_searchKeyword != result.keyword ||
+            m_searchPage != result.page) {
+          return;
+        }
+
+        searchModel->appendItems(result.items);
+        searchModel->setHasMore(!result.items.isEmpty());
+        searchModel->setLoading(false);
+        self->setIsLoading(false);
+
+        if (result.items.isEmpty() && result.page == 1) {
+          searchModel->setErrorMessage(
+              QString("未找到%1相关视频").arg(result.keyword));
+        }
+      },
+      [this, searchModel, requestKeyword, requestPage](
+          BiliController *self, int code, const QString &msg) {
         Q_UNUSED(code)
-        if (!self || !searchModel)
+        if (!searchModel)
           return;
 
+        if (m_searchKeyword == requestKeyword && m_searchPage == requestPage &&
+            m_searchPage > 1) {
+          m_searchPage--;
+        }
         searchModel->setLoading(false);
         searchModel->setErrorMessage(msg);
         self->setIsLoading(false);

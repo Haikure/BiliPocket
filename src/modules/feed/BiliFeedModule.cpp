@@ -2,10 +2,12 @@
 #include "BiliAsyncUtils.hpp"
 #include "BiliController.h"
 #include "BiliJsonUtils.h"
+#include "BiliListFetch.hpp"
 #include "BiliModels.h"
 #include "BiliNetwork.h"
 #include "modules/history/BiliHistoryModule.h"
 #include "modules/login/BiliLoginModule.h"
+#include "modules/search/BiliSearchModule.h"
 #include "modules/season/BiliSeasonModule.h"
 
 #include <QCoreApplication>
@@ -108,26 +110,6 @@ ParsedDynamicList parseDynamicPayload(const QJsonObject &data, const QString &re
   return result;
 }
 
-QVector<HotSearchItem> parseHotSearchPayload(const QJsonObject &data) {
-  QJsonObject trending = data.value("trending").toObject();
-  QJsonArray list = trending.value("list").toArray();
-
-  QVector<HotSearchItem> items;
-  items.reserve(qMin(list.size(), 50));
-  int pos = 1;
-  for (const QJsonValue &v : list) {
-    if (pos > 50)
-      break;
-    QJsonObject obj = v.toObject();
-    HotSearchItem item;
-    item.keyword = obj.value("keyword").toString().left(100);
-    item.icon = obj.value("icon").toString();
-    item.position = pos++;
-    items.append(item);
-  }
-  return items;
-}
-
 } // namespace
 
 BiliFeedModule::BiliFeedModule(BiliController *controller)
@@ -163,43 +145,41 @@ void BiliFeedModule::fetchPopular(int page, int pageSize) {
   // fresh_type: 3 表示换一换推荐，4 用于后续刷新
   paramsRecommend["fresh_type"] = (page <= 1) ? "3" : "4";
 
-  QPointer<BiliController> self(m_controller);
   VideoListModel *popularModel = m_controller->popularListModel();
 
-  auto onSuccess = [this, self, popularModel, page](const QJsonObject &data) {
-    if (!self || !popularModel)
-      return;
-    biliRunInWorker(
-        self, [data, page]() { return parsePopularPayload(data, page); },
-        [this, self, popularModel](ParsedVideoList result) {
-          if (!self || !popularModel || m_popularPage != result.page)
-            return;
-          popularModel->appendItems(result.items);
-          popularModel->setHasMore(result.hasMore);
-          popularModel->setLoading(false);
-          self->setIsLoading(false);
+  BiliListFetch::fetchParsed(
+      m_controller, BiliListFetch::Via::Network, apiPath, paramsRecommend,
+      [popularModel](BiliController *) { return popularModel != nullptr; },
+      [page](const QJsonObject &data) { return parsePopularPayload(data, page); },
+      [this, popularModel](BiliController *self, ParsedVideoList result) {
+        if (!popularModel || m_popularPage != result.page)
+          return;
+        popularModel->appendItems(result.items);
+        popularModel->setHasMore(result.hasMore);
+        popularModel->setLoading(false);
+        self->setIsLoading(false);
 
-          if (result.items.isEmpty() && result.page == 1) {
-            popularModel->setErrorMessage("暂无推荐视频");
-          }
-        });
-  };
+        if (result.items.isEmpty() && result.page == 1) {
+          popularModel->setErrorMessage("暂无推荐视频");
+        }
+      },
+      [this, popularModel, page](BiliController *self, int code,
+                                 const QString &msg) {
+        if (!popularModel)
+          return;
 
-  auto onErrorFinal = [self, popularModel](int code, const QString &msg) {
-    if (!self || !popularModel)
-      return;
+        if (code == -101 || code == -401 || code == 401) {
+          self->clearLocalLoginState();
+        }
 
-    if (code == -101 || code == -401 || code == 401) {
-      self->clearLocalLoginState();
-    }
-
-    popularModel->setLoading(false);
-    popularModel->setErrorMessage(msg);
-    self->setIsLoading(false);
-    emit self->toastMessage(QString("加载失败：%1").arg(msg));
-  };
-
-  m_controller->network()->get(apiPath, paramsRecommend, onSuccess, onErrorFinal);
+        if (m_popularPage == page && m_popularPage > 1) {
+          m_popularPage--;
+        }
+        popularModel->setLoading(false);
+        popularModel->setErrorMessage(msg);
+        self->setIsLoading(false);
+        emit self->toastMessage(QString("加载失败：%1").arg(msg));
+      });
 }
 
 void BiliFeedModule::fetchMorePopular() {
@@ -227,28 +207,23 @@ void BiliFeedModule::fetchRanking(int rid) {
   params["rid"] = QString::number(rid);
   params["type"] = "all";
 
-  QPointer<BiliController> self(m_controller);
   VideoListModel *rankingModel = m_controller->rankingListModel();
 
-  m_controller->network()->get(
-      "/ranking", params,
-      [self, rankingModel](const QJsonObject &data) {
-        if (!self || !rankingModel)
+  BiliListFetch::fetchParsed(
+      m_controller, BiliListFetch::Via::Network, "/ranking", params,
+      [rankingModel](BiliController *) { return rankingModel != nullptr; },
+      [](const QJsonObject &data) { return parseRankingPayload(data); },
+      [rankingModel](BiliController *self, QVector<VideoItem> items) {
+        if (!rankingModel)
           return;
-        biliRunInWorker(
-            self, [data]() { return parseRankingPayload(data); },
-            [self, rankingModel](QVector<VideoItem> items) {
-              if (!self || !rankingModel)
-                return;
-              rankingModel->appendItems(items);
-              rankingModel->setHasMore(false);
-              rankingModel->setLoading(false);
-              self->setIsLoading(false);
-            });
+        rankingModel->appendItems(items);
+        rankingModel->setHasMore(false);
+        rankingModel->setLoading(false);
+        self->setIsLoading(false);
       },
-      [self, rankingModel](int code, const QString &msg) {
+      [rankingModel](BiliController *self, int code, const QString &msg) {
         Q_UNUSED(code)
-        if (!self || !rankingModel)
+        if (!rankingModel)
           return;
 
         rankingModel->setLoading(false);
@@ -285,37 +260,33 @@ void BiliFeedModule::fetchDynamic(const QString &type, const QString &offset, qi
   if (!requestOffset.isEmpty()) params["offset"] = requestOffset;
   if (m_dynamicHostMid > 0) params["host_mid"] = QString::number(m_dynamicHostMid);
 
-  QPointer<BiliController> self(m_controller);
-
-  m_controller->network()->get(
-      "/dynamic/feed", params,
-      [this, self, model, requestOffset](const QJsonObject &data) {
-        if (!self || !model)
-          return;
-        biliRunInWorker(
-            self, [data, requestOffset]() { return parseDynamicPayload(data, requestOffset); },
-            [this, self, model](ParsedDynamicList result) {
-              if (!self || !model)
-                return;
-              if (result.requestOffset != m_dynamicOffset && !result.requestOffset.isEmpty()) {
-                model->setLoading(false);
-                self->setIsLoading(false);
-                return;
-              }
-
-              model->appendItems(result.items);
-              m_dynamicOffset = result.offset;
-              model->setHasMore(result.hasMore);
-              model->setLoading(false);
-              self->setIsLoading(false);
-
-              if (model->count() == 0) {
-                model->setErrorMessage(QStringLiteral("暂无动态"));
-              }
-            });
+  BiliListFetch::fetchParsed(
+      m_controller, BiliListFetch::Via::Network, "/dynamic/feed", params,
+      [model](BiliController *) { return model != nullptr; },
+      [requestOffset](const QJsonObject &data) {
+        return parseDynamicPayload(data, requestOffset);
       },
-      [self, model](int code, const QString &msg) {
-        if (!self || !model)
+      [this, model](BiliController *self, ParsedDynamicList result) {
+        if (!model)
+          return;
+        if (result.requestOffset != m_dynamicOffset && !result.requestOffset.isEmpty()) {
+          model->setLoading(false);
+          self->setIsLoading(false);
+          return;
+        }
+
+        model->appendItems(result.items);
+        m_dynamicOffset = result.offset;
+        model->setHasMore(result.hasMore);
+        model->setLoading(false);
+        self->setIsLoading(false);
+
+        if (model->count() == 0) {
+          model->setErrorMessage(QStringLiteral("暂无动态"));
+        }
+      },
+      [model](BiliController *self, int code, const QString &msg) {
+        if (!model)
           return;
 
         if (code == -101 || code == -401 || code == 401) {
@@ -366,38 +337,34 @@ void BiliFeedModule::fetchUpDynamics(qint64 hostMid, const QString &offset) {
   params["host_mid"] = QString::number(hostMid);
   if (!requestOffset.isEmpty()) params["offset"] = requestOffset;
 
-  QPointer<BiliController> self(m_controller);
-
-  m_controller->network()->get(
-      "/dynamic/feed", params,
-      [this, self, model, requestOffset, hostMid](const QJsonObject &data) {
-        if (!self || !model)
-          return;
-        biliRunInWorker(
-            self, [data, requestOffset]() { return parseDynamicPayload(data, requestOffset); },
-            [this, self, model, hostMid](ParsedDynamicList result) {
-              if (!self || !model)
-                return;
-              if (m_upDynamicHostMid != hostMid ||
-                  (result.requestOffset != m_upDynamicOffset && !result.requestOffset.isEmpty())) {
-                model->setLoading(false);
-                self->setIsLoading(false);
-                return;
-              }
-
-              model->appendItems(result.items);
-              m_upDynamicOffset = result.offset;
-              model->setHasMore(result.hasMore);
-              model->setLoading(false);
-              self->setIsLoading(false);
-
-              if (model->count() == 0) {
-                model->setErrorMessage(QStringLiteral("暂无图文动态"));
-              }
-            });
+  BiliListFetch::fetchParsed(
+      m_controller, BiliListFetch::Via::Network, "/dynamic/feed", params,
+      [model](BiliController *) { return model != nullptr; },
+      [requestOffset](const QJsonObject &data) {
+        return parseDynamicPayload(data, requestOffset);
       },
-      [self, model](int code, const QString &msg) {
-        if (!self || !model)
+      [this, model, hostMid](BiliController *self, ParsedDynamicList result) {
+        if (!model)
+          return;
+        if (m_upDynamicHostMid != hostMid ||
+            (result.requestOffset != m_upDynamicOffset && !result.requestOffset.isEmpty())) {
+          model->setLoading(false);
+          self->setIsLoading(false);
+          return;
+        }
+
+        model->appendItems(result.items);
+        m_upDynamicOffset = result.offset;
+        model->setHasMore(result.hasMore);
+        model->setLoading(false);
+        self->setIsLoading(false);
+
+        if (model->count() == 0) {
+          model->setErrorMessage(QStringLiteral("暂无图文动态"));
+        }
+      },
+      [model](BiliController *self, int code, const QString &msg) {
+        if (!model)
           return;
 
         if (code == -101 || code == -401 || code == 401) {
@@ -423,37 +390,6 @@ void BiliFeedModule::fetchMoreUpDynamics() {
 // ====== API: 热搜 ======
 
 void BiliFeedModule::fetchHotSearch() {
-  if (m_controller->hotSearchListModel()->loading())
-    return;
-
-  m_controller->hotSearchListModel()->setLoading(true);
-
-  QMap<QString, QString> params;
-  params["limit"] = "10";
-
-  QPointer<BiliController> self(m_controller);
-  HotSearchModel *hotSearchModel = m_controller->hotSearchListModel();
-
-  m_controller->network()->get(
-      "/hot/search", params,
-      [self, hotSearchModel](const QJsonObject &data) {
-        if (!self || !hotSearchModel)
-          return;
-        biliRunInWorker(
-            self, [data]() { return parseHotSearchPayload(data); },
-            [self, hotSearchModel](QVector<HotSearchItem> items) {
-              if (!self || !hotSearchModel)
-                return;
-              hotSearchModel->setItems(items);
-              hotSearchModel->setLoading(false);
-            });
-      },
-      [self, hotSearchModel](int code, const QString &msg) {
-        Q_UNUSED(code)
-        if (!self || !hotSearchModel)
-          return;
-
-        hotSearchModel->setLoading(false);
-        emit self->toastMessage(QString("热搜加载失败：%1").arg(msg));
-      });
+  // 热搜实现在搜索模块，这里只保留 QML 入口
+  m_controller->searchModule()->fetchHotSearch();
 }

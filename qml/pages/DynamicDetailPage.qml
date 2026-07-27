@@ -1,6 +1,6 @@
 import QtQuick 2.12
-import QtGraphicalEffects 1.12
 import "../components" as Components
+import "../js/ImageUrl.js" as ImageUrl
 import ".."
 
 Rectangle {
@@ -36,54 +36,6 @@ Rectangle {
         return arr
     }
 
-    function cdnSizedUrl(url, suffix) {
-        if (!url) return ""
-        var s = String(url)
-        if (s.indexOf("data:image/") === 0 || s.indexOf("image://") === 0) return s
-        var queryIndex = s.indexOf("?")
-        var base = queryIndex >= 0 ? s.slice(0, queryIndex) : s
-        var query = queryIndex >= 0 ? s.slice(queryIndex) : ""
-        var slash = base.lastIndexOf("/")
-        var at = base.indexOf("@", slash + 1)
-        if (at >= 0) base = base.slice(0, at)
-        return base + suffix + query
-    }
-
-    function originalImageUrl(url) {
-        if (!url) return ""
-        var s = String(url)
-        if (s.indexOf("image://") === 0 || s.indexOf("data:image/") === 0) return s
-        var queryIndex = s.indexOf("?")
-        var base = queryIndex >= 0 ? s.slice(0, queryIndex) : s
-        var query = queryIndex >= 0 ? s.slice(queryIndex) : ""
-        var slash = base.lastIndexOf("/")
-        var at = base.indexOf("@", slash + 1)
-        if (at >= 0) base = base.slice(0, at)
-        return base + query
-    }
-
-    function cdnImageSource(url, suffix) {
-        var s = cdnSizedUrl(url, suffix)
-        if (!s) return ""
-        if (s.indexOf("data:image/") === 0 || s.indexOf("image://") === 0) return s
-        return "image://bili/" + encodeURIComponent(s)
-    }
-
-    function avatarImageSource(url) {
-        return cdnImageSource(url, "@50w_50h")
-    }
-
-    function previewImageSource(url) {
-        return cdnImageSource(url, "@320w_170h")
-    }
-
-    function fullImageSource(url) {
-        var s = originalImageUrl(url)
-        if (!s) return ""
-        if (s.indexOf("data:image/") === 0 || s.indexOf("image://") === 0) return s
-        return "image://bili/original/" + encodeURIComponent(s)
-    }
-
     function commentContext() {
         var oid = String(value("commentOid", "") || "").trim()
         var type = Number(value("commentType", 0) || 0)
@@ -115,7 +67,7 @@ Rectangle {
     }
 
     function openPicture(url) {
-        var original = originalImageUrl(url)
+        var original = ImageUrl.originalUrl(url)
         if (!original) return
         if (controller) controller.toastMessage("正在打开图片...")
         if (controller && typeof imageViewer !== "undefined" && imageViewer) {
@@ -187,24 +139,20 @@ Rectangle {
                     color: Theme.bgTertiary
                     clip: true
 
+                    // 圆形裁剪由 image provider 的 round/ 前缀完成，无需 OpacityMask
                     Image {
                         id: authorAvatarImage
                         anchors.fill: parent
-                        source: avatarImageSource(value("authorFace", ""))
+                        sourceSize: Qt.size(48, 48)
+                        source: {
+                            var s = String(value("authorFace", "") || "")
+                            if (!s) return ""
+                            if (s.indexOf("image://") === 0 || s.indexOf("data:image/") === 0) return s
+                            return "image://bili/round/size/48x48/" + encodeURIComponent(s)
+                        }
                         fillMode: Image.PreserveAspectCrop
                         asynchronous: true
                         smooth: true
-                        visible: false
-                    }
-
-                    OpacityMask {
-                        anchors.fill: authorAvatarImage
-                        source: authorAvatarImage
-                        maskSource: Rectangle {
-                            width: authorAvatarImage.width
-                            height: authorAvatarImage.height
-                            radius: Math.min(width, height) / 2
-                        }
                     }
 
                     MouseArea {
@@ -297,7 +245,9 @@ Rectangle {
 
                     Image {
                         anchors.fill: parent
-                        source: previewImageSource(modelData)
+                        // 预览图：CDN 已按 320x170 缩图，限制解码尺寸（大图另走 openPicture）
+                        sourceSize: Qt.size(320, 170)
+                        source: ImageUrl.previewSource(modelData)
                         fillMode: Image.PreserveAspectFit
                         asynchronous: true
                         smooth: true
@@ -501,7 +451,8 @@ Rectangle {
         Image {
             anchors.fill: parent
             anchors.margins: 8
-            source: detailPage.fullImageSource(detailPage.fullscreenImageUrl)
+            // 大图查看：保留原图，不加 sourceSize 限制
+            source: ImageUrl.originalImageSource(detailPage.fullscreenImageUrl)
             fillMode: Image.PreserveAspectFit
             asynchronous: true
             smooth: true
@@ -516,59 +467,5 @@ Rectangle {
         }
     }
 
-    Item {
-        id: id_pop_container
-        anchors.fill: parent
-        z: 3000
-        visible: popItemObject !== null
-        property var popItemObject: null
-        signal closeSameItem(string popStackId)
-
-        function updateStackInfo() {
-            if (id_pop_container.children.length > 1) {
-                popItemObject = id_pop_container.children[id_pop_container.children.length - 2]
-            } else {
-                popItemObject = null
-            }
-        }
-
-        function show(componentPath) {
-            function initObj(obj) {
-                if (!obj) return
-                Object.defineProperty(obj, "popStackId", {
-                    enumerable: false,
-                    configurable: false,
-                    writable: false,
-                    value: componentPath
-                })
-                popItemObject = obj
-                if (obj.backButtonClicked) {
-                    obj.backButtonClicked.connect(function() {
-                        closeSameItem(obj.popStackId)
-                        updateStackInfo()
-                        obj.destroy(1)
-                    })
-                }
-                id_pop_container.closeSameItem.connect(function(popStackId) {
-                    if (popStackId === obj.popStackId) obj.destroy(1)
-                })
-                if (obj.show) obj.show()
-            }
-
-            closeSameItem(componentPath)
-            var comp = Qt.createComponent(componentPath)
-            if (comp.status === Component.Ready) {
-                var incubator = comp.incubateObject(id_pop_container)
-                if (incubator.status !== Component.Ready) {
-                    incubator.onStatusChanged = function(s) {
-                        if (s === Component.Ready) initObj(incubator.object)
-                    }
-                } else {
-                    initObj(incubator.object)
-                }
-            } else {
-                console.error("Image viewer component error: " + comp.errorString())
-            }
-        }
-    }
+    Components.PopupStack { id: id_pop_container }
 }

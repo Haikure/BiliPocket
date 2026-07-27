@@ -336,7 +336,7 @@ Rectangle {
         }
     }
 
-    ListView {
+    Components.LoadMoreListView {
         id: seasonVideoList
         anchors.top: titleBar.bottom
         anchors.topMargin: 4
@@ -344,29 +344,22 @@ Rectangle {
         anchors.right: parent.right
         anchors.bottom: parent.bottom
         anchors.bottomMargin: 8
-        orientation: ListView.Horizontal
         spacing: 6
-        clip: true
-        cacheBuffer: 640
-        displayMarginBeginning: 160
-        displayMarginEnd: 160
         leftMargin: 8
         rightMargin: 8
         model: seasonPage.seasonModel
+        // 页面级 seasonLoadingMore 兼作"定位上次观看"连拉链路的守卫，需并入 loading
+        loading: !!(seasonPage.seasonModel && seasonPage.seasonModel.loading === true)
+                 || seasonPage.seasonLoadingMore
 
-        onAtXEndChanged: {
+        onLoadMoreRequested: {
             if (!controller) return
-            if (!atXEnd) return
-            if (seasonVideoList.contentWidth <= seasonVideoList.width + 2) return
-            if (seasonPage.seasonLoadingMore) return
-            if (seasonVideoList.model && seasonVideoList.model.loading) return
-            if (seasonVideoList.model && seasonVideoList.model.hasMore === false) return
             seasonPage.seasonLoadingMore = true
             controller.season.fetchMoreSeasonVideos()
         }
 
         delegate: Item {
-            width: 105
+            width: Theme.cardWidth
             height: seasonVideoList.height
             property bool current: (model.bvid || "") === seasonPage.currentBvid
             property bool located: index === seasonPage.locatedLastWatchedIndex

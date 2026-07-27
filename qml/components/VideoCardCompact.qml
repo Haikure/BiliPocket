@@ -1,9 +1,11 @@
-import QtQuick 2.12
+// ListView.onPooled/onReused 需要 QtQuick 2.15（Qt 5.15）
+import QtQuick 2.15
 import ".."
+import "../js/ImageUrl.js" as ImageUrl
 
 Item {
     id: card
-    width: 105
+    width: Theme.cardWidth
     height: parent.height
 
     property string videoTitle: ""
@@ -25,8 +27,11 @@ Item {
     property bool imageActive: true
     property bool placeholder: false
     property bool preferOffscreenPlaceholder: false
-    readonly property bool offscreenPlaceholderActive: preferOffscreenPlaceholder && !placeholder && !isNearViewport()
+    // 离屏占位不用绑定（绑 view.contentX 会在滚动时每帧重估），改为低频时机主动更新
+    property bool offscreenPlaceholderActive: false
     readonly property bool effectivePlaceholder: placeholder || offscreenPlaceholderActive
+    // 池化标记：入池后暂停加载与状态更新
+    property bool _pooled: false
     // 标题与UP信息之间的垂直间距（默认 2）
     property real infoSpacing: 2
     // 注意：该组件的文本在 Column 中布局，直接改子项 y 通常不会生效
@@ -37,10 +42,7 @@ Item {
     signal clicked()
 
     function normalizedCoverSource(url) {
-        if (!url) return ""
-        var s = String(url)
-        if (s.indexOf("data:image/") === 0 || s.indexOf("image://") === 0) return s
-        return "image://bili/size/320x170/" + encodeURIComponent(s)
+        return ImageUrl.sizedProviderSource(url, 320, 170)
     }
 
     function isNearViewport() {
@@ -55,7 +57,7 @@ Item {
 
     function scheduleCoverLoad() {
         var requested = coverUrl
-        var shouldLoad = imageActive && !effectivePlaceholder
+        var shouldLoad = imageActive && !effectivePlaceholder && !_pooled
         if (!requested) {
             coverImageSource = ""
             _loadedCoverUrl = ""
@@ -67,16 +69,28 @@ Item {
         }
         if (!shouldLoad) return
         Qt.callLater(function() {
-            if (imageActive && !effectivePlaceholder && coverUrl === requested) {
+            if (imageActive && !effectivePlaceholder && !card._pooled && coverUrl === requested) {
                 coverImageSource = normalizedCoverSource(requested)
                 _loadedCoverUrl = requested
             }
         })
     }
 
-    Component.onCompleted: scheduleCoverLoad()
+    function updateOffscreenPlaceholder() {
+        if (_pooled) return
+        var next = preferOffscreenPlaceholder && !placeholder && !isNearViewport()
+        if (offscreenPlaceholderActive !== next) offscreenPlaceholderActive = next
+    }
+
+    Component.onCompleted: {
+        updateOffscreenPlaceholder()
+        scheduleCoverLoad()
+    }
     onCoverUrlChanged: scheduleCoverLoad()
     onImageActiveChanged: scheduleCoverLoad()
+    onPreferOffscreenPlaceholderChanged: updateOffscreenPlaceholder()
+    onPlaceholderChanged: updateOffscreenPlaceholder()
+    onVisibleChanged: updateOffscreenPlaceholder()
     onEffectivePlaceholderChanged: {
         scheduleCoverLoad()
         if (effectivePlaceholder) {
@@ -84,6 +98,23 @@ Item {
                 if (card.effectivePlaceholder) effectivePlaceholderTextCanvas.requestPaint()
             })
         }
+    }
+
+    // 复用时要重估占位并重新调度封面：model 角色未变不会触发 onCoverUrlChanged
+    ListView.onPooled: card._pooled = true
+    ListView.onReused: {
+        card._pooled = false
+        card.updateOffscreenPlaceholder()
+        card.scheduleCoverLoad()
+    }
+
+    // 也监听 contentX/Y：恢复滚动位置等程序化跳转不会发 movementEnded
+    Connections {
+        target: (card.preferOffscreenPlaceholder && card.ListView.view) ? card.ListView.view : null
+        function onMovementEnded() { card.updateOffscreenPlaceholder() }
+        function onFlickEnded() { card.updateOffscreenPlaceholder() }
+        function onContentXChanged() { if (target && !target.moving) card.updateOffscreenPlaceholder() }
+        function onContentYChanged() { if (target && !target.moving) card.updateOffscreenPlaceholder() }
     }
 
     Rectangle {
@@ -217,8 +248,8 @@ Item {
             }
         }
 
-        // 信息区
-        Canvas {
+        // 信息区（骨架占位）
+        SkeletonPill {
             id: effectivePlaceholderTextCanvas
             visible: effectivePlaceholder
             anchors {
@@ -231,31 +262,11 @@ Item {
                 bottom: parent.bottom
                 bottomMargin: 3
             }
-            Component.onCompleted: requestPaint()
-            onVisibleChanged: if (visible) requestPaint()
-            onWidthChanged: requestPaint()
-            onHeightChanged: requestPaint()
-            onPaint: {
-                var ctx = getContext("2d")
-                ctx.clearRect(0, 0, width, height)
-
-                function pill(x, y, w, h, color) {
-                    ctx.fillStyle = color
-                    ctx.beginPath()
-                    ctx.moveTo(x + h / 2, y)
-                    ctx.lineTo(x + w - h / 2, y)
-                    ctx.quadraticCurveTo(x + w, y, x + w, y + h / 2)
-                    ctx.quadraticCurveTo(x + w, y + h, x + w - h / 2, y + h)
-                    ctx.lineTo(x + h / 2, y + h)
-                    ctx.quadraticCurveTo(x, y + h, x, y + h / 2)
-                    ctx.quadraticCurveTo(x, y, x + h / 2, y)
-                    ctx.fill()
-                }
-
-                pill(0, 0, width * 0.92, 8, Theme.withAlpha(Theme.textTertiary, 0.16))
-                pill(0, 11, width * 0.78, 8, Theme.withAlpha(Theme.textTertiary, 0.12))
-                pill(0, 25, width * 0.56, 7, Theme.withAlpha(Theme.textTertiary, 0.10))
-            }
+            pills: [
+                { x: 0, y: 0, w: 0.92, h: 8, color: Theme.withAlpha(Theme.textTertiary, 0.16) },
+                { x: 0, y: 11, w: 0.78, h: 8, color: Theme.withAlpha(Theme.textTertiary, 0.12) },
+                { x: 0, y: 25, w: 0.56, h: 7, color: Theme.withAlpha(Theme.textTertiary, 0.10) }
+            ]
         }
 
         Column {

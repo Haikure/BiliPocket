@@ -1,14 +1,17 @@
-import QtQuick 2.12
+// reuseItems 需要 QtQuick 2.15（Qt 5.15）
+import QtQuick 2.15
+// 封面圆角矩形仍用 OpacityMask：provider 的 round/ 只支持圆形裁剪
 import QtGraphicalEffects 1.12
 import BiliPlugin 1.0
 import "../components" as Components
+import "../js/RichText.js" as RichText
 import ".."
 
 Rectangle {
     id: detailPage
     width: 320
     height: 170
-    color: "#0d1117"
+    color: Theme.detailBg
 
     property var controller: null
     property string bvid: ""
@@ -41,62 +44,18 @@ Rectangle {
         }
     }
 
-    function escapeRichText(text) {
-        if (!text) return ""
-        var s = String(text)
-        s = s.replace(/&/g, "&amp;")
-        s = s.replace(/</g, "&lt;")
-        s = s.replace(/>/g, "&gt;")
-        return s
-    }
-
-    function escapeHtmlAttribute(text) {
-        if (!text) return ""
-        var s = String(text)
-        s = s.replace(/&/g, "&amp;")
-        s = s.replace(/"/g, "&quot;")
-        s = s.replace(/</g, "&lt;")
-        s = s.replace(/>/g, "&gt;")
-        return s
-    }
-
-    function videoLinkRichText(text, fallbackText) {
-        var raw = text && text.length > 0 ? String(text) : fallbackText
-        var pattern = /(?:https?:\/\/)?(?:[Ww][Ww][Ww]\.)?[Bb]23\.[Tt][Vv]\/[0-9A-Za-z]+|[Bb][Vv]1[1-9A-HJ-NP-Za-km-z]{9}/g
-        var lastIndex = 0
-        var result = ""
-        var match
-
-        while ((match = pattern.exec(raw)) !== null) {
-            var start = match.index
-            var token = match[0]
-            result += escapeRichText(raw.slice(lastIndex, start))
-            result += "<a href=\"" + escapeHtmlAttribute(token) + "\" style=\"color:#60a5fa;text-decoration:none;\">" + escapeRichText(token) + "</a>"
-            lastIndex = start + token.length
-        }
-
-        result += escapeRichText(raw.slice(lastIndex))
-        return result.replace(/\r\n/g, "<br>").replace(/\n/g, "<br>").replace(/\r/g, "<br>")
-    }
-
-    function descRichText(text) {
-        return videoLinkRichText(text, "暂无简介")
-    }
-
     function openVideoLink(link) {
         if (!link || !controller || !controller.video || !controller.video.resolveVideoLink) return
         controller.video.resolveVideoLink(link)
     }
 
+    // 圆形裁剪由 image provider 的 round/ 前缀完成，无需 OpacityMask
+    // 统一取 48x48，与其他页面头像共用缓存键
     function avatarImageSource(url) {
         if (!url) return ""
-        if (url.indexOf("data:image/") === 0) return url
         var s = String(url)
-        var queryIndex = s.indexOf("?")
-        var base = queryIndex >= 0 ? s.slice(0, queryIndex) : s
-        var query = queryIndex >= 0 ? s.slice(queryIndex) : ""
-        if (base.indexOf("@") < 0) s = base + "@50w_50h" + query
-        return "image://bili/" + encodeURIComponent(s)
+        if (s.indexOf("image://") === 0 || s.indexOf("data:image/") === 0) return s
+        return "image://bili/round/size/48x48/" + encodeURIComponent(s)
     }
 
     function updateQualities() {
@@ -255,9 +214,9 @@ Rectangle {
         })
     }
 
-    readonly property color primaryColor: "#3b82f6"
-    readonly property color primaryLight: "#60a5fa"
-    readonly property color primaryDark: "#2563eb"
+    readonly property color primaryColor: Theme.detailAccent
+    readonly property color primaryLight: Theme.detailAccentLight
+    readonly property color primaryDark: Theme.detailAccentDark
     readonly property color surfaceColor: Qt.rgba(1, 1, 1, 0.05)
     readonly property color surfaceBorder: Qt.rgba(1, 1, 1, 0.08)
 
@@ -374,7 +333,7 @@ Rectangle {
                         width: 110
                         height: 66
                         radius: 8
-                        color: "#1e293b"
+                        color: Theme.detailSurface
                         anchors.left: parent.left
                         clip: true
 
@@ -409,40 +368,22 @@ Rectangle {
                         }
                     }
 
-                    Canvas {
+                    Components.SkeletonPill {
                         anchors.left: parent.left
                         anchors.leftMargin: 119
                         anchors.right: parent.right
                         anchors.top: parent.top
                         anchors.topMargin: 2
                         height: 62
-                        property int paintToken: detailPage.skeletonPaintToken
-                        Component.onCompleted: requestPaint()
-                        onPaintTokenChanged: requestPaint()
-                        onVisibleChanged: if (visible) requestPaint()
-                        onWidthChanged: requestPaint()
-                        onHeightChanged: requestPaint()
-                        onPaint: {
-                            var ctx = getContext("2d")
-                            ctx.clearRect(0, 0, width, height)
-                            function pill(x, y, w, h, color) {
-                                ctx.fillStyle = color
-                                ctx.beginPath()
-                                ctx.moveTo(x + h / 2, y)
-                                ctx.lineTo(x + w - h / 2, y)
-                                ctx.quadraticCurveTo(x + w, y, x + w, y + h / 2)
-                                ctx.quadraticCurveTo(x + w, y + h, x + w - h / 2, y + h)
-                                ctx.lineTo(x + h / 2, y + h)
-                                ctx.quadraticCurveTo(x, y + h, x, y + h / 2)
-                                ctx.quadraticCurveTo(x, y, x + h / 2, y)
-                                ctx.fill()
-                            }
-                            pill(0, 0, width * 0.94, 9, Qt.rgba(148 / 255, 163 / 255, 184 / 255, 0.20))
-                            pill(0, 13, width * 0.70, 9, Qt.rgba(148 / 255, 163 / 255, 184 / 255, 0.16))
-                            pill(0, 31, width * 0.48, 14, Qt.rgba(96 / 255, 165 / 255, 250 / 255, 0.16))
-                            pill(0, 52, width * 0.28, 7, Qt.rgba(148 / 255, 163 / 255, 184 / 255, 0.13))
-                            pill(width * 0.34, 52, width * 0.24, 7, Qt.rgba(148 / 255, 163 / 255, 184 / 255, 0.13))
-                        }
+                        paintToken: detailPage.skeletonPaintToken
+                        // x/w ≤1 为宽度比例，>1 为绝对像素
+                        pills: [
+                            { x: 0, y: 0, w: 0.94, h: 9, color: Qt.rgba(148 / 255, 163 / 255, 184 / 255, 0.20) },
+                            { x: 0, y: 13, w: 0.70, h: 9, color: Qt.rgba(148 / 255, 163 / 255, 184 / 255, 0.16) },
+                            { x: 0, y: 31, w: 0.48, h: 14, color: Qt.rgba(96 / 255, 165 / 255, 250 / 255, 0.16) },
+                            { x: 0, y: 52, w: 0.28, h: 7, color: Qt.rgba(148 / 255, 163 / 255, 184 / 255, 0.13) },
+                            { x: 0.34, y: 52, w: 0.24, h: 7, color: Qt.rgba(148 / 255, 163 / 255, 184 / 255, 0.13) }
+                        ]
                     }
                 }
 
@@ -459,7 +400,7 @@ Rectangle {
                     width: 110
                     height: 66
                     radius: 8
-                    color: "#1e293b"
+                    color: Theme.detailSurface
                     anchors.left: parent.left
                     clip: true
 
@@ -468,6 +409,8 @@ Rectangle {
                         anchors.fill: parent
                         source: controller && controller.videoPic && detailPage.heroImagesActive
                         ? "image://bili/size/320x170/" + encodeURIComponent(controller.videoPic) : ""
+                        // 与 VideoCardCompact 封面同解码尺寸，同 URL 共享内存缓存
+                        sourceSize: Qt.size(210, 140)
                         fillMode: Image.PreserveAspectCrop
                         asynchronous: true
                         smooth: true
@@ -494,7 +437,7 @@ Rectangle {
                         gradient: Gradient {
                             GradientStop { position: 0.0; color: "transparent" }
                             GradientStop { position: 0.5; color: "transparent" }
-                            GradientStop { position: 1.0; color: "#cc000000" }
+                            GradientStop { position: 1.0; color: Theme.bgOverlay }
                         }
                     }
 
@@ -677,30 +620,18 @@ Rectangle {
                                             width: 14
                                             height: 14
                                             radius: 7
-                                            color: "#1e293b"
+                                            color: Theme.detailSurface
                                             anchors.verticalCenter: parent.verticalCenter
 
                                             Image {
-                                                id: staffAvatarImage
                                                 anchors.fill: parent
                                                 smooth: true
                                                 mipmap: true
                                                 source: staffItem.face && detailPage.heroImagesActive
                                                         ? detailPage.avatarImageSource(staffItem.face) : ""
+                                                sourceSize: Qt.size(48, 48)
                                                 fillMode: Image.PreserveAspectCrop
                                                 asynchronous: true
-                                                visible: false
-                                            }
-
-                                            OpacityMask {
-                                                anchors.fill: staffAvatarImage
-                                                source: staffAvatarImage
-                                                maskSource: Rectangle {
-                                                    width: staffAvatarImage.width
-                                                    height: staffAvatarImage.height
-                                                    radius: Math.min(width, height) / 2
-                                                    visible: false
-                                                }
                                             }
                                         }
 
@@ -1248,6 +1179,8 @@ Rectangle {
                     height: 60
                     orientation: ListView.Horizontal
                     clip: true
+                    // VideoPartCard 纯属性驱动、无瞬态状态，复用安全（多P可达数百项）
+                    reuseItems: true
                     spacing: 6
                     leftMargin: 8
                     rightMargin: 8
@@ -1406,15 +1339,14 @@ Rectangle {
                         Text {
                             id: descText
                             width: parent.width
-                            text: detailPage.descRichText(controller && controller.videoDesc
-                                  ? controller.videoDesc : "暂无简介")
+                            text: RichText.linkifyVideoLinks(controller ? controller.videoDesc : "", "暂无简介")
                             textFormat: Text.RichText
                             color: "#94a3b8"
                             font.family: Theme.fontFamily
                             font.pixelSize: 10
                             wrapMode: Text.Wrap
                             lineHeight: 1.35
-                            linkColor: "#60a5fa"
+                            linkColor: Theme.richTextLinkColor
                             onLinkActivated: detailPage.openVideoLink(link)
                         }
                     }
@@ -1666,6 +1598,8 @@ Rectangle {
                         orientation: ListView.Horizontal
                         spacing: 6
                         clip: true
+                        // VideoCardCompact 已适配 pooled/reused，可安全复用
+                        reuseItems: true
                         cacheBuffer: 240
                         displayMarginBeginning: 80
                         displayMarginEnd: 80
@@ -1675,7 +1609,7 @@ Rectangle {
                         visible: relatedSection.relatedModel && relatedSection.relatedModel.count > 0
 
                         delegate: Components.VideoCardCompact {
-                            width: 105
+                            width: Theme.cardWidth
                             height: relatedList.height
                             videoTitle: model.title || ""
                             coverUrl: model.pic || ""
@@ -1703,7 +1637,7 @@ Rectangle {
                         Repeater {
                             model: 3
                             Components.VideoCardCompact {
-                                width: 105
+                                width: Theme.cardWidth
                                 height: 135
                                 placeholder: true
                                     titleScale: 0.9

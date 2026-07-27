@@ -29,4 +29,6 @@ private:
   void resolveShortVideoLink(const QUrl &url, bool useGet);
 
   BiliController *m_controller;
+  // 最近观看上报去重键
+  QString m_lastRecentViewReportKey;
 };

@@ -1,7 +1,7 @@
 {
     "id": "com.bilipocket.player",
     "name": "笔里哔哩",
-    "version": "1.7.1",
+    "version": "1.7.2",
     "author": "BiliPocket",
     "description": "为 320x170 触摸屏设计的哔哩哔哩客户端",
     "icon": "file://userdisk/PenMods/plugins/bili_plugin/icon.png",

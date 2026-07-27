@@ -1,7 +1,8 @@
 import QtQuick 2.12
-import QtGraphicalEffects 1.12
 import BiliPlugin 1.0
 import "../components" as Components
+import "../js/ImageUrl.js" as ImageUrl
+import "../js/RichText.js" as RichText
 import ".."
 
 Rectangle {
@@ -260,135 +261,25 @@ Rectangle {
     }
 
     function commentImageSource(url) {
-        if (!url) return ""
-        if (url.indexOf("data:image/") === 0) return url
-        return "image://bili/original/" + encodeURIComponent(url)
+        return ImageUrl.originalImageSource(url)
     }
 
     function commentThumbSource(url) {
-        if (!url) return ""
-        if (url.indexOf("data:image/") === 0) return url
-        return "image://bili/" + encodeURIComponent(url)
+        return ImageUrl.rawImageSource(url)
     }
 
+    // 圆形裁剪由 image provider 的 round/ 前缀完成，无需 OpacityMask
+    // 统一取 48x48（页内显示 20/22/24px），与其他页面头像共用缓存键
     function avatarImageSource(url) {
         if (!url) return ""
-        if (url.indexOf("data:image/") === 0) return url
         var s = String(url)
-        var queryIndex = s.indexOf("?")
-        var base = queryIndex >= 0 ? s.slice(0, queryIndex) : s
-        var query = queryIndex >= 0 ? s.slice(queryIndex) : ""
-        if (base.indexOf("@") < 0) s = base + "@50w_50h" + query
-        return "image://bili/" + encodeURIComponent(s)
-    }
-
-    function escapeCommentRichText(text) {
-        if (!text) return ""
-        var s = String(text)
-        s = s.replace(/&/g, "&amp;")
-        s = s.replace(/</g, "&lt;")
-        s = s.replace(/>/g, "&gt;")
-        return s
-    }
-
-    function escapeHtmlAttribute(text) {
-        if (!text) return ""
-        var s = String(text)
-        s = s.replace(/&/g, "&amp;")
-        s = s.replace(/"/g, "&quot;")
-        s = s.replace(/</g, "&lt;")
-        s = s.replace(/>/g, "&gt;")
-        return s
-    }
-
-    function videoLinkAnchor(token) {
-        return "<a href=\"" + escapeHtmlAttribute(token) + "\" style=\"color:#60a5fa;text-decoration:none;\">" +
-                escapeCommentRichText(token) + "</a>"
-    }
-
-    function isCommentVideoLinkToken(token) {
-        if (!token) return false
-        return /^(?:https?:\/\/)?(?:[Ww][Ww][Ww]\.)?[Bb]23\.[Tt][Vv]\/[0-9A-Za-z]+$/.test(token) ||
-                /^[Bb][Vv]1[1-9A-HJ-NP-Za-km-z]{9}$/.test(token)
+        if (s.indexOf("image://") === 0 || s.indexOf("data:image/") === 0) return s
+        return "image://bili/round/size/48x48/" + encodeURIComponent(s)
     }
 
     function openVideoLink(link) {
         if (!link || !controller || !controller.video || !controller.video.resolveVideoLink) return
         controller.video.resolveVideoLink(link)
-    }
-
-    function normalizeCommentEmoteUrl(url) {
-        if (!url) return ""
-        var s = String(url)
-        if (s.indexOf("//") === 0) {
-            s = "https:" + s
-        } else if (s.indexOf("http://") === 0) {
-            s = "https://" + s.slice(7)
-        }
-
-        if (s.indexOf("/bfs/emote/") < 0) return s
-
-        var queryIndex = s.indexOf("?")
-        var base = queryIndex >= 0 ? s.slice(0, queryIndex) : s
-        var query = queryIndex >= 0 ? s.slice(queryIndex) : ""
-        if (base.indexOf("@") >= 0) return s
-        return base + "@80w_80h" + query
-    }
-
-    function findCommentEmote(emotes, token) {
-        if (!emotes || !token) return null
-        if (emotes[token]) return emotes[token]
-        if (token.length > 2 && token.charAt(0) === "[" && token.charAt(token.length - 1) === "]") {
-            var bare = token.slice(1, -1)
-            if (emotes[bare]) return emotes[bare]
-        }
-        return null
-    }
-
-    function commentEmoteDisplaySize(emote) {
-        var base = Number(commentsPage._commentBodyFontSize || Theme.fontBody)
-        var metaSize = Number(emote && emote.size ? emote.size : 1)
-        var scale = metaSize >= 2 ? 1.35 : 1.15
-        var size = Math.round(base * scale)
-        var minSize = base
-        var maxSize = base + 5
-        return Math.max(minSize, Math.min(size, maxSize))
-    }
-
-    function commentRichText(content, emotes) {
-        var raw = content && content.length > 0 ? String(content) : ""
-        if (!raw) return ""
-
-        raw = raw.replace(/\r\n/g, "\n").replace(/\r/g, "\n")
-        var tokenPattern = /(?:https?:\/\/)?(?:[Ww][Ww][Ww]\.)?[Bb]23\.[Tt][Vv]\/[0-9A-Za-z]+|[Bb][Vv]1[1-9A-HJ-NP-Za-km-z]{9}|\[[^\[\]\r\n]{1,40}\]/g
-        var rich = ""
-        var lastIndex = 0
-        var match
-
-        while ((match = tokenPattern.exec(raw)) !== null) {
-            var start = match.index
-            var token = match[0]
-            rich += escapeCommentRichText(raw.slice(lastIndex, start))
-
-            if (commentsPage.isCommentVideoLinkToken(token)) {
-                rich += commentsPage.videoLinkAnchor(token)
-            } else {
-                var emote = commentsPage.findCommentEmote(emotes, token)
-                if (!emote || !emote.url) {
-                    rich += escapeCommentRichText(token)
-                } else {
-                    var size = commentsPage.commentEmoteDisplaySize(emote)
-                    var src = commentsPage.escapeHtmlAttribute(commentsPage.normalizeCommentEmoteUrl(emote.url))
-                    var alt = commentsPage.escapeHtmlAttribute(token)
-                    rich += "<img src=\"" + src + "\" width=\"" + size + "\" height=\"" + size + "\" alt=\"" + alt + "\" />"
-                }
-            }
-
-            lastIndex = start + token.length
-        }
-
-        rich += escapeCommentRichText(raw.slice(lastIndex))
-        return rich.replace(/\n/g, "<br>")
     }
 
     function firstPicture(pictures) {
@@ -661,6 +552,7 @@ Rectangle {
         model: controller && commentsPage.commentsModelAttached ? controller.comments.commentModel() : null
         spacing: 5
         clip: true
+        // 不开 reuseItems（默认即 false）：每条有独立的 bodyExpanded 状态，复用会串
         cacheBuffer: 360
         displayMarginBeginning: 120
         displayMarginEnd: 240
@@ -727,29 +619,15 @@ Rectangle {
                             radius: 11
                             color: Theme.bgTertiary
 
-
                             Image {
-                                id: commentAvatarImage
                                 anchors.fill: parent
                                 source: commentDelegate.cachedAvatarSource
-                                sourceSize: Qt.size(44, 44)
+                                sourceSize: Qt.size(48, 48)
                                 fillMode: Image.PreserveAspectCrop
                                 asynchronous: true
                                 smooth: true
                                 mipmap: true
-                                visible: false
-                            }
-
-                            OpacityMask {
-                                anchors.fill: commentAvatarImage
-                                source: commentAvatarImage
-                                opacity: commentAvatarImage.status === Image.Ready ? 1 : 0
-                                maskSource: Rectangle {
-                                    width: commentAvatarImage.width
-                                    height: commentAvatarImage.height
-                                    radius: Math.min(width, height) / 2
-                                    visible: false
-                                }
+                                opacity: status === Image.Ready ? 1 : 0
                             }
                         }
 
@@ -850,27 +728,14 @@ Rectangle {
 
                             Column {
                                 id: commentBodyPreview
-                                property string richContent: commentsPage.commentRichText(model.content || "", model.emotes || ({}))
+                                property string richContent: RichText.emoteRichText(model.content || "", model.emotes || ({}),
+                                                                                    commentsPage._commentBodyFontSize || Theme.fontBody)
                                 property real previewHeight: Math.ceil(commentsPage._commentBodyFontSize * 1.22 * 5 + 2)
-                                property bool hasMore: commentBodyMeasure.paintedHeight > previewHeight + 1
+                                // 正文 Text 始终完整排版（折叠只靠外层 clip），直接用它的
+                                // paintedHeight 判断，省掉原先仅用于测高的隐藏 Text
+                                property bool hasMore: commentBodyText.paintedHeight > previewHeight + 1
                                 width: parent.width
                                 spacing: 2
-
-                                Text {
-                                    id: commentBodyMeasure
-                                    width: parent.width
-                                    height: 0
-                                    visible: false
-                                    text: commentBodyPreview.richContent
-                                    textFormat: Text.RichText
-                                    font.family: Theme.fontFamily
-                                    font.pixelSize: commentsPage._commentBodyFontSize
-                                    wrapMode: Text.Wrap
-                                    lineHeight: 1.22
-                                    renderType: commentsPage._textRenderType
-                                    font.hintingPreference: commentsPage._hinting
-                                    antialiasing: commentsPage._textAA
-                                }
 
                                 Item {
                                     width: parent.width
@@ -890,7 +755,7 @@ Rectangle {
                                         wrapMode: Text.Wrap
                                         elide: Text.ElideNone
                                         lineHeight: 1.22
-                                        linkColor: "#60a5fa"
+                                        linkColor: Theme.richTextLinkColor
                                         renderType: commentsPage._textRenderType
                                         font.hintingPreference: commentsPage._hinting
                                         antialiasing: commentsPage._textAA
@@ -1138,6 +1003,7 @@ Rectangle {
             anchors.fill: parent
             clip: true
             boundsBehavior: Flickable.DragOverBounds
+            // 不开 reuseItems（默认即 false）：delegate 用 Component.onCompleted 命令式加载图片，复用不会重跑、会残留旧项
             cacheBuffer: 60
             spacing: 5
             model: controller ? controller.comments.commentReplyModel() : null
@@ -1190,26 +1056,14 @@ Rectangle {
                             color: Theme.bgTertiary
 
                             Image {
-                                id: detailAvatarImage
                                 anchors.fill: parent
                                 source: selectedComment && selectedComment.avatar
                                         ? commentsPage.avatarImageSource(selectedComment.avatar) : ""
+                                sourceSize: Qt.size(48, 48)
                                 fillMode: Image.PreserveAspectCrop
                                 asynchronous: true
                                 smooth: true
                                 mipmap: true
-                                visible: false
-                            }
-
-                            OpacityMask {
-                                anchors.fill: detailAvatarImage
-                                source: detailAvatarImage
-                                maskSource: Rectangle {
-                                    width: detailAvatarImage.width
-                                    height: detailAvatarImage.height
-                                    radius: Math.min(width, height) / 2
-                                    visible: false
-                                }
                             }
                         }
 
@@ -1313,14 +1167,15 @@ Rectangle {
 
                             Text {
                                 width: parent.width
-                                text: selectedComment ? commentsPage.commentRichText(selectedComment.content || "", selectedComment.emotes || ({})) : ""
+                                text: selectedComment ? RichText.emoteRichText(selectedComment.content || "", selectedComment.emotes || ({}),
+                                                                               commentsPage._commentBodyFontSize || Theme.fontBody) : ""
                                 textFormat: Text.RichText
                                 color: Theme.textPrimary
                                 font.family: Theme.fontFamily
                                 font.pixelSize: commentsPage._commentBodyFontSize
                                 wrapMode: Text.Wrap
                                 lineHeight: 1.24
-                                linkColor: "#60a5fa"
+                                linkColor: Theme.richTextLinkColor
                                 renderType: commentsPage._textRenderType
                                 font.hintingPreference: commentsPage._hinting
                                 antialiasing: commentsPage._textAA
@@ -1340,6 +1195,7 @@ Rectangle {
                                 Image {
                                     anchors.fill: parent
                                     source: commentsPage.commentThumbSource(commentsPage.firstPicture(selectedComment.pictures))
+                                    sourceSize: Qt.size(commentsPage._commentPictureWidth * 2, commentsPage._commentPictureHeight * 2)
                                     fillMode: Image.PreserveAspectCrop
                                     asynchronous: true
                                     mipmap: true
@@ -1433,25 +1289,13 @@ Rectangle {
                         color: Theme.bgTertiary
 
                         Image {
-                            id: replyAvatarImage
                             anchors.fill: parent
                             source: replyAvatarSource
+                            sourceSize: Qt.size(48, 48)
                             fillMode: Image.PreserveAspectCrop
                             asynchronous: true
                             smooth: true
                             mipmap: true
-                            visible: false
-                        }
-
-                        OpacityMask {
-                            anchors.fill: replyAvatarImage
-                            source: replyAvatarImage
-                            maskSource: Rectangle {
-                                width: replyAvatarImage.width
-                                height: replyAvatarImage.height
-                                radius: Math.min(width, height) / 2
-                                visible: false
-                            }
                         }
                     }
 
@@ -1512,14 +1356,15 @@ Rectangle {
 
                         Text {
                             width: parent.width
-                            text: commentsPage.commentRichText(model.content || "", model.emotes || ({}))
+                            text: RichText.emoteRichText(model.content || "", model.emotes || ({}),
+                                                         commentsPage._commentBodyFontSize || Theme.fontBody)
                             textFormat: Text.RichText
                             color: Theme.textPrimary
                             font.family: Theme.fontFamily
                             font.pixelSize: commentsPage._commentBodyFontSize
                             wrapMode: Text.Wrap
                             lineHeight: 1.22
-                            linkColor: "#60a5fa"
+                            linkColor: Theme.richTextLinkColor
                             renderType: commentsPage._textRenderType
                             font.hintingPreference: commentsPage._hinting
                             antialiasing: commentsPage._textAA
@@ -1543,6 +1388,7 @@ Rectangle {
                                 Image {
                                     anchors.fill: parent
                                     source: replyPictureSource
+                                    sourceSize: Qt.size(commentsPage._commentPictureWidth * 2, commentsPage._commentPictureHeight * 2)
                                     fillMode: Image.PreserveAspectCrop
                                     asynchronous: true
                                     mipmap: true
@@ -1623,13 +1469,14 @@ Rectangle {
             }
         }
 
-        // 全屏图片：自适应显示
+        // 全屏图片：屏幕只有 320x170，按屏幕尺寸解码即可
         Image {
             id: fullImage
             anchors.fill: parent
             anchors.margins: 0
             z: 2
             source: commentsPage.commentImageSource(commentsPage.fullscreenImageUrl)
+            sourceSize: Qt.size(320, 170)
             fillMode: Image.PreserveAspectFit
             asynchronous: true
             mipmap: true
@@ -1823,61 +1670,7 @@ Rectangle {
     }
 
     // 系统图片查看器弹出容器
-    Item {
-        id: id_pop_container
-        anchors.fill: parent
-        z: 3000
-        visible: popItemObject !== null
-        property var popItemObject: null
-        signal closeSameItem(string popStackId)
-
-        function updateStackInfo() {
-            if (id_pop_container.children.length > 1) {
-                popItemObject = id_pop_container.children[id_pop_container.children.length - 2]
-            } else {
-                popItemObject = null
-            }
-        }
-
-        function show(componentPath) {
-            function initObj(obj) {
-                if (!obj) return
-                Object.defineProperty(obj, "popStackId", {
-                    enumerable: false,
-                    configurable: false,
-                    writable: false,
-                    value: componentPath
-                })
-                popItemObject = obj
-                if (obj.backButtonClicked) {
-                    obj.backButtonClicked.connect(function() {
-                        closeSameItem(obj.popStackId)
-                        updateStackInfo()
-                        obj.destroy(1)
-                    })
-                }
-                id_pop_container.closeSameItem.connect(function(popStackId) {
-                    if (popStackId === obj.popStackId) obj.destroy(1)
-                })
-                if (obj.show) obj.show()
-            }
-
-            closeSameItem(componentPath)
-            var comp = Qt.createComponent(componentPath)
-            if (comp.status === Component.Ready) {
-                var incubator = comp.incubateObject(id_pop_container)
-                if (incubator.status !== Component.Ready) {
-                    incubator.onStatusChanged = function(s) {
-                        if (s === Component.Ready) initObj(incubator.object)
-                    }
-                } else {
-                    initObj(incubator.object)
-                }
-            } else {
-                console.error("Image viewer component error: " + comp.errorString())
-            }
-        }
-    }
+    Components.PopupStack { id: id_pop_container }
 
     Connections {
         target: controller

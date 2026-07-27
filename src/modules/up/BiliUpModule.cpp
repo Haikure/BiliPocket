@@ -2,6 +2,7 @@
 #include "BiliAsyncUtils.hpp"
 #include "BiliController.h"
 #include "BiliJsonUtils.h"
+#include "BiliListFetch.hpp"
 #include "BiliModels.h"
 #include "BiliNetwork.h"
 #include "modules/history/BiliHistoryModule.h"
@@ -35,8 +36,7 @@
 #include <functional>
 
 // 由插件文件提供的 Go 服务控制函数
-extern bool bili_startApiServer();
-extern void bili_stopApiServer();
+extern void bili_restartApiServerAsync(std::function<void(bool)> onFinished);
 
 namespace {
 
@@ -184,11 +184,19 @@ ParsedUpVideos parseUpVideosPayload(const QJsonObject &data, qint64 mid,
   return result;
 }
 
-QVector<UpSeasonItem> parseUpSeasonsPayload(const QJsonObject &data) {
+struct ParsedUpSeasons {
+  int page = 1;
   QVector<UpSeasonItem> items;
+  bool hasMore = false;
+};
+
+ParsedUpSeasons parseUpSeasonsPayload(const QJsonObject &data, int page,
+                                      int pageSize) {
+  ParsedUpSeasons result;
+  result.page = page;
   QJsonObject itemsLists = data.value("items_lists").toObject();
 
-  auto parseList = [&items](const QJsonArray &arr, bool isSeries) {
+  auto parseList = [&result](const QJsonArray &arr, bool isSeries) {
     for (const QJsonValue &v : arr) {
       if (!v.isObject())
         continue;
@@ -205,13 +213,24 @@ QVector<UpSeasonItem> parseUpSeasonsPayload(const QJsonObject &data) {
       it.total = meta.value("total").toInt();
       it.isSeries = isSeries;
       if (it.seasonId > 0 && !it.name.isEmpty())
-        items.append(it);
+        result.items.append(it);
     }
   };
 
   parseList(itemsLists.value("seasons_list").toArray(), false);
   parseList(itemsLists.value("series_list").toArray(), true);
-  return items;
+
+  // 分页信息：items_lists.page = {page_num, page_size, total}
+  QJsonObject pageObj = itemsLists.value("page").toObject();
+  bool totalKnown = false;
+  const int total = BiliJson::intValue(pageObj.value("total"), &totalKnown);
+  const int ps = pageObj.value("page_size").toInt(pageSize);
+  if (totalKnown && ps > 0) {
+    result.hasMore = page * ps < total;
+  } else {
+    result.hasMore = result.items.size() >= pageSize;
+  }
+  return result;
 }
 
 } // namespace
@@ -232,13 +251,13 @@ void BiliUpModule::fetchUpInfo(qint64 mid) {
 
   if (m_controller->m_upUserMid != mid) {
     m_controller->m_upUserMid = mid;
-    m_controller->m_upVideoPage = 1;
-    m_controller->m_upVideoHasMore = true;
-    m_controller->m_upVideoCursorNext = 0;
-    m_controller->m_upVideoCursorPrev = 0;
-    m_controller->m_upVideoHasPrevious = false;
-    if (m_controller->m_upLastWatchedRank != 0) {
-      m_controller->m_upLastWatchedRank = 0;
+    m_upVideoPage = 1;
+    m_upVideoHasMore = true;
+    m_upVideoCursorNext = 0;
+    m_upVideoCursorPrev = 0;
+    m_upVideoHasPrevious = false;
+    if (m_upLastWatchedRank != 0) {
+      m_upLastWatchedRank = 0;
       emit m_controller->upLastWatchedChanged();
     }
     m_controller->setUpVideoTotal(0);
@@ -260,7 +279,12 @@ void BiliUpModule::fetchUpInfo(qint64 mid) {
       emit m_controller->upFollowChanged();
     }
     // 重置合集筛选 / 合集列表
-    if (m_controller->m_upSeasonModel) m_controller->m_upSeasonModel->clear();
+    if (m_controller->m_upSeasonModel) {
+      m_controller->m_upSeasonModel->clear();
+      m_controller->m_upSeasonModel->setHasMore(false);
+    }
+    m_upSeasonListPage = 1;
+    m_upSeasonListHasMore = true;
     bool seasonChanged = (m_controller->m_upSelectedSeasonId != 0)
                          || !m_controller->m_upSelectedSeasonName.isEmpty()
                          || m_controller->m_upSelectedIsSeries
@@ -409,23 +433,23 @@ void BiliUpModule::fetchUpVideos(qint64 mid, int page, int pageSize) {
 
   if (m_controller->m_upUserMid != mid) {
     m_controller->m_upUserMid = mid;
-    m_controller->m_upVideoPage = 1;
-    m_controller->m_upVideoHasMore = true;
-    m_controller->m_upVideoCursorNext = 0;
-    m_controller->m_upVideoCursorPrev = 0;
-    m_controller->m_upVideoHasPrevious = false;
-    if (m_controller->m_upLastWatchedRank != 0) {
-      m_controller->m_upLastWatchedRank = 0;
+    m_upVideoPage = 1;
+    m_upVideoHasMore = true;
+    m_upVideoCursorNext = 0;
+    m_upVideoCursorPrev = 0;
+    m_upVideoHasPrevious = false;
+    if (m_upLastWatchedRank != 0) {
+      m_upLastWatchedRank = 0;
       emit m_controller->upLastWatchedChanged();
     }
     m_controller->m_upVideoModel->clear();
   }
 
-  m_controller->m_upVideoPage = page;
+  m_upVideoPage = page;
   if (page == 1) {
-    m_controller->m_upVideoCursorNext = 0;
-    m_controller->m_upVideoCursorPrev = 0;
-    m_controller->m_upVideoHasPrevious = false;
+    m_upVideoCursorNext = 0;
+    m_upVideoCursorPrev = 0;
+    m_upVideoHasPrevious = false;
     m_controller->m_upVideoModel->clear();
   }
   m_controller->m_upVideoModel->setLoading(true);
@@ -437,64 +461,63 @@ void BiliUpModule::fetchUpVideos(qint64 mid, int page, int pageSize) {
 
   // 优先使用游标翻页：当 page>1 且已有游标时，带 max 参数请求下一段
   // 这样可避免 UP 新增稿件导致 pn 翻页出现丢失/重复。
-  if (page > 1 && m_controller->m_upVideoCursorNext > 0) {
+  if (page > 1 && m_upVideoCursorNext > 0) {
     params["pn"] = "1";
-    params["max"] = QString::number(m_controller->m_upVideoCursorNext);
+    params["max"] = QString::number(m_upVideoCursorNext);
   } else {
     params["pn"] = QString::number(page);
   }
 
-  QPointer<BiliController> self(m_controller);
   const qint64 requestMid = mid;
   const int requestPage = page;
   const int requestPageSize = pageSize;
-  m_controller->apiGet(
-      "/user/videos", params,
-      [self, requestMid, requestPage, requestPageSize](const QJsonObject &data) {
-        if (!self)
+  BiliListFetch::fetchParsed(
+      m_controller, BiliListFetch::Via::ApiWithLoading, "/user/videos", params,
+      BiliListFetch::acceptAlways,
+      [requestMid, requestPage, requestPageSize](const QJsonObject &data) {
+        return parseUpVideosPayload(data, requestMid, requestPage,
+                                    requestPageSize);
+      },
+      [this](BiliController *self, ParsedUpVideos result) {
+        if (!self->m_upVideoModel)
           return;
-        biliRunInWorker(
-            self,
-            [data, requestMid, requestPage, requestPageSize]() {
-              return parseUpVideosPayload(data, requestMid, requestPage,
-                                          requestPageSize);
-            },
-            [self](ParsedUpVideos result) {
-              if (!self || !self->m_upVideoModel)
-                return;
-              if (self->m_upUserMid != result.mid ||
-                  self->m_upVideoPage != result.page ||
-                  self->m_upSelectedSeasonId > 0) {
-                return;
-              }
+        if (self->m_upUserMid != result.mid ||
+            m_upVideoPage != result.page ||
+            self->m_upSelectedSeasonId > 0) {
+          return;
+        }
 
-              self->m_upVideoModel->appendItems(result.items);
-              if (result.page == 1 && self->m_upLastWatchedRank != result.lastWatchedRank) {
-                self->m_upLastWatchedRank = result.lastWatchedRank;
-                emit self->upLastWatchedChanged();
-              }
-              if (result.totalKnown)
-                self->setUpVideoTotal(result.total);
-              if (result.nextCursor > 0)
-                self->m_upVideoCursorNext = result.nextCursor;
-              self->m_upVideoCursorPrev = result.prevCursor;
-              self->m_upVideoHasPrevious = result.hasPrevious;
+        self->m_upVideoModel->appendItems(result.items);
+        if (result.page == 1 && m_upLastWatchedRank != result.lastWatchedRank) {
+          m_upLastWatchedRank = result.lastWatchedRank;
+          emit self->upLastWatchedChanged();
+        }
+        if (result.totalKnown)
+          self->setUpVideoTotal(result.total);
+        if (result.nextCursor > 0)
+          m_upVideoCursorNext = result.nextCursor;
+        m_upVideoCursorPrev = result.prevCursor;
+        m_upVideoHasPrevious = result.hasPrevious;
 
-              self->m_upVideoHasMore = result.hasMore;
-              self->m_upVideoModel->setHasMore(result.hasMore);
-              self->m_upVideoModel->setLoading(false);
+        m_upVideoHasMore = result.hasMore;
+        self->m_upVideoModel->setHasMore(result.hasMore);
+        self->m_upVideoModel->setLoading(false);
 
-              if (result.items.isEmpty() && result.page == 1) {
-                self->m_upVideoModel->setErrorMessage("暂无投稿");
-              }
-            });
+        if (result.items.isEmpty() && result.page == 1) {
+          self->m_upVideoModel->setErrorMessage("暂无投稿");
+        }
       },
-      [this](int, const QString &msg) {
-        m_controller->m_upVideoModel->setLoading(false);
-        m_controller->m_upVideoModel->setErrorMessage(msg);
-        emit m_controller->toastMessage(QString("加载投稿失败：%1").arg(msg));
-      },
-      true);
+      [this, requestMid, requestPage](BiliController *self, int,
+                                      const QString &msg) {
+        if (self->m_upUserMid == requestMid &&
+            m_upVideoPage == requestPage &&
+            m_upVideoPage > 1) {
+          m_upVideoPage--;
+        }
+        self->m_upVideoModel->setLoading(false);
+        self->m_upVideoModel->setErrorMessage(msg);
+        emit self->toastMessage(QString("加载投稿失败：%1").arg(msg));
+      });
 }
 
 void BiliUpModule::fetchUpVideosAroundAid(qint64 mid, qint64 aid, int pageSize) {
@@ -508,11 +531,11 @@ void BiliUpModule::fetchUpVideosAroundAid(qint64 mid, qint64 aid, int pageSize) 
 
   pageSize = qBound(1, pageSize, 30);
   m_controller->m_upUserMid = mid;
-  m_controller->m_upVideoPage = 1;
-  m_controller->m_upVideoHasMore = true;
-  m_controller->m_upVideoCursorNext = 0;
-  m_controller->m_upVideoCursorPrev = 0;
-  m_controller->m_upVideoHasPrevious = false;
+  m_upVideoPage = 1;
+  m_upVideoHasMore = true;
+  m_upVideoCursorNext = 0;
+  m_upVideoCursorPrev = 0;
+  m_upVideoHasPrevious = false;
   m_controller->m_upVideoModel->clear();
   m_controller->m_upVideoModel->setLoading(true);
   m_controller->m_upVideoModel->setErrorMessage("");
@@ -524,65 +547,58 @@ void BiliUpModule::fetchUpVideosAroundAid(qint64 mid, qint64 aid, int pageSize) 
   params["aid"] = QString::number(aid);
   params["include_cursor"] = "true";
 
-  QPointer<BiliController> self(m_controller);
   const qint64 requestMid = mid;
   const qint64 requestAid = aid;
   const int requestPageSize = pageSize;
-  m_controller->apiGet(
-      "/user/videos", params,
-      [self, requestMid, requestAid, requestPageSize](const QJsonObject &data) {
-        if (!self)
+  BiliListFetch::fetchParsed(
+      m_controller, BiliListFetch::Via::ApiWithLoading, "/user/videos", params,
+      BiliListFetch::acceptAlways,
+      [requestMid, requestPageSize](const QJsonObject &data) {
+        return parseUpVideosPayload(data, requestMid, 1, requestPageSize);
+      },
+      [this, requestAid](BiliController *self, ParsedUpVideos result) {
+        if (!self->m_upVideoModel)
           return;
-        biliRunInWorker(
-            self,
-            [data, requestMid, requestPageSize]() {
-              return parseUpVideosPayload(data, requestMid, 1, requestPageSize);
-            },
-            [self, requestAid](ParsedUpVideos result) {
-              if (!self || !self->m_upVideoModel)
-                return;
-              if (self->m_upUserMid != result.mid ||
-                  self->m_upSelectedSeasonId > 0) {
-                return;
-              }
+        if (self->m_upUserMid != result.mid ||
+            self->m_upSelectedSeasonId > 0) {
+          return;
+        }
 
-              self->m_upVideoModel->appendItems(result.items);
-              if (self->m_upLastWatchedRank != result.lastWatchedRank) {
-                self->m_upLastWatchedRank = result.lastWatchedRank;
-                emit self->upLastWatchedChanged();
-              }
-              if (result.totalKnown)
-                self->setUpVideoTotal(result.total);
-              if (result.nextCursor > 0)
-                self->m_upVideoCursorNext = result.nextCursor;
-              self->m_upVideoCursorPrev = result.prevCursor;
-              // 定位到很靠后的视频时，APP 游标接口常把定位 aid 放在返回列表首项。
-              // 此时 first aid == requestAid 仍然可以作为“向前取”的游标，不能据此关掉前置加载。
-              self->m_upVideoHasPrevious = result.prevCursor > 0 &&
-                                           (result.hasPrevious || result.prevCursor == requestAid);
+        self->m_upVideoModel->appendItems(result.items);
+        if (m_upLastWatchedRank != result.lastWatchedRank) {
+          m_upLastWatchedRank = result.lastWatchedRank;
+          emit self->upLastWatchedChanged();
+        }
+        if (result.totalKnown)
+          self->setUpVideoTotal(result.total);
+        if (result.nextCursor > 0)
+          m_upVideoCursorNext = result.nextCursor;
+        m_upVideoCursorPrev = result.prevCursor;
+        // 定位到很靠后的视频时，APP 游标接口常把定位 aid 放在返回列表首项。
+        // 此时 first aid == requestAid 仍然可以作为“向前取”的游标，不能据此关掉前置加载。
+        m_upVideoHasPrevious = result.prevCursor > 0 &&
+                               (result.hasPrevious || result.prevCursor == requestAid);
 
-              self->m_upVideoHasMore = result.hasMore;
-              self->m_upVideoModel->setHasMore(result.hasMore);
-              self->m_upVideoModel->setLoading(false);
+        m_upVideoHasMore = result.hasMore;
+        self->m_upVideoModel->setHasMore(result.hasMore);
+        self->m_upVideoModel->setLoading(false);
 
-              if (result.items.isEmpty()) {
-                self->m_upVideoModel->setErrorMessage("暂无投稿");
-              }
-            });
+        if (result.items.isEmpty()) {
+          self->m_upVideoModel->setErrorMessage("暂无投稿");
+        }
       },
-      [this](int, const QString &msg) {
-        m_controller->m_upVideoModel->setLoading(false);
-        m_controller->m_upVideoModel->setErrorMessage(msg);
-        emit m_controller->toastMessage(QString("定位投稿失败：%1").arg(msg));
-      },
-      true);
+      [](BiliController *self, int, const QString &msg) {
+        self->m_upVideoModel->setLoading(false);
+        self->m_upVideoModel->setErrorMessage(msg);
+        emit self->toastMessage(QString("定位投稿失败：%1").arg(msg));
+      });
 }
 
 bool BiliUpModule::canFetchPreviousUpVideos() const {
   return m_controller && m_controller->m_upSelectedSeasonId == 0 &&
          !m_controller->m_upSelectedDynamic &&
-         m_controller->m_upVideoHasPrevious &&
-         m_controller->m_upVideoCursorPrev > 0 &&
+         m_upVideoHasPrevious &&
+         m_upVideoCursorPrev > 0 &&
          m_controller->m_upVideoModel &&
          !m_controller->m_upVideoModel->loading();
 }
@@ -598,62 +614,55 @@ void BiliUpModule::fetchPreviousUpVideos() {
   params["mid"] = QString::number(m_controller->m_upUserMid);
   params["ps"] = "20";
   params["pn"] = "1";
-  params["aid"] = QString::number(m_controller->m_upVideoCursorPrev);
+  params["aid"] = QString::number(m_upVideoCursorPrev);
   // 参考 PiliPlus：include_cursor 只用于首次按 aid 定位；
   // 向前补页只传 firstAid + sort=asc，否则会再次返回定位窗口，拿不到前置页。
   params["sort"] = "asc";
 
-  QPointer<BiliController> self(m_controller);
   const qint64 requestMid = m_controller->m_upUserMid;
-  const qint64 requestCursor = m_controller->m_upVideoCursorPrev;
-  m_controller->apiGet(
-      "/user/videos", params,
-      [self, requestMid, requestCursor](const QJsonObject &data) {
-        if (!self)
-          return;
-        biliRunInWorker(
-            self,
-            [data, requestMid]() {
-              return parseUpVideosPayload(data, requestMid, 1, 20);
-            },
-            [self, requestCursor](ParsedUpVideos result) {
-              if (!self || !self->m_upVideoModel)
-                return;
-              if (self->m_upUserMid != result.mid || self->m_upSelectedSeasonId > 0) {
-                self->m_upVideoModel->setLoading(false);
-                return;
-              }
-
-              QVector<VideoItem> freshItems;
-              freshItems.reserve(result.items.size());
-              for (const VideoItem &item : result.items) {
-                if (item.aid > 0 && self->m_upVideoModel->indexOfAid(item.aid) >= 0)
-                  continue;
-                bool duplicated = false;
-                for (const VideoItem &fresh : freshItems) {
-                  if (item.aid > 0 && fresh.aid == item.aid) {
-                    duplicated = true;
-                    break;
-                  }
-                }
-                if (!duplicated) freshItems.append(item);
-              }
-
-              self->m_upVideoModel->prependItems(freshItems);
-              self->m_upVideoCursorPrev = result.prevCursor;
-              self->m_upVideoHasPrevious = (result.hasPrevious || !freshItems.isEmpty()) &&
-                                           result.prevCursor > 0 &&
-                                           result.prevCursor != requestCursor;
-              self->m_upVideoModel->setLoading(false);
-            });
+  const qint64 requestCursor = m_upVideoCursorPrev;
+  BiliListFetch::fetchParsed(
+      m_controller, BiliListFetch::Via::ApiWithLoading, "/user/videos", params,
+      BiliListFetch::acceptAlways,
+      [requestMid](const QJsonObject &data) {
+        return parseUpVideosPayload(data, requestMid, 1, 20);
       },
-      [self](int, const QString &msg) {
-        if (!self || !self->m_upVideoModel) return;
+      [this, requestCursor](BiliController *self, ParsedUpVideos result) {
+        if (!self->m_upVideoModel)
+          return;
+        if (self->m_upUserMid != result.mid || self->m_upSelectedSeasonId > 0) {
+          self->m_upVideoModel->setLoading(false);
+          return;
+        }
+
+        QVector<VideoItem> freshItems;
+        freshItems.reserve(result.items.size());
+        for (const VideoItem &item : result.items) {
+          if (item.aid > 0 && self->m_upVideoModel->indexOfAid(item.aid) >= 0)
+            continue;
+          bool duplicated = false;
+          for (const VideoItem &fresh : freshItems) {
+            if (item.aid > 0 && fresh.aid == item.aid) {
+              duplicated = true;
+              break;
+            }
+          }
+          if (!duplicated) freshItems.append(item);
+        }
+
+        self->m_upVideoModel->prependItems(freshItems);
+        m_upVideoCursorPrev = result.prevCursor;
+        m_upVideoHasPrevious = (result.hasPrevious || !freshItems.isEmpty()) &&
+                               result.prevCursor > 0 &&
+                               result.prevCursor != requestCursor;
+        self->m_upVideoModel->setLoading(false);
+      },
+      [](BiliController *self, int, const QString &msg) {
+        if (!self->m_upVideoModel) return;
         self->m_upVideoModel->setLoading(false);
         self->m_upVideoModel->setErrorMessage(msg);
         emit self->toastMessage(QString("加载更早定位内容失败：%1").arg(msg));
-      },
-      true);
+      });
 }
 
 void BiliUpModule::searchUpVideos(qint64 mid, const QString &keyword, int page, int pageSize) {
@@ -696,61 +705,52 @@ void BiliUpModule::searchUpVideos(qint64 mid, const QString &keyword, int page, 
   params["pn"] = QString::number(page);
   params["ps"] = QString::number(pageSize);
 
-  QPointer<BiliController> self(m_controller);
   SearchResultModel *searchModel = m_controller->m_upSearchModel;
   const qint64 requestMid = mid;
   const QString requestKeyword = m_upSearchKeyword;
   const int requestPage = page;
   const int requestPageSize = pageSize;
 
-  m_controller->apiGet(
-      "/user/search", params,
-      [this, self, searchModel, requestMid, requestKeyword, requestPage,
-       requestPageSize](const QJsonObject &data) {
-        if (!self || !searchModel) {
+  BiliListFetch::fetchParsed(
+      m_controller, BiliListFetch::Via::ApiWithLoading, "/user/search", params,
+      [searchModel](BiliController *) { return searchModel != nullptr; },
+      [requestMid, requestPage, requestPageSize](const QJsonObject &data) {
+        return parseUpVideosPayload(data, requestMid, requestPage,
+                                    requestPageSize);
+      },
+      [this, searchModel, requestKeyword,
+       requestPageSize](BiliController *self, ParsedUpVideos result) {
+        if (!searchModel) {
           return;
         }
-        biliRunInWorker(
-            self,
-            [data, requestMid, requestPage, requestPageSize]() {
-              return parseUpVideosPayload(data, requestMid, requestPage,
-                                          requestPageSize);
-            },
-            [this, self, searchModel, requestKeyword,
-             requestPageSize](ParsedUpVideos result) {
-              if (!self || !searchModel) {
-                return;
-              }
-              if (m_upSearchMid != result.mid || m_upSearchKeyword != requestKeyword ||
-                  m_upSearchPage != result.page) {
-                searchModel->setLoading(false);
-                self->setIsLoading(false);
-                return;
-              }
+        if (m_upSearchMid != result.mid || m_upSearchKeyword != requestKeyword ||
+            m_upSearchPage != result.page) {
+          searchModel->setLoading(false);
+          self->setIsLoading(false);
+          return;
+        }
 
-              searchModel->appendItems(result.items);
-              bool hasMore = result.hasMore;
-              if (result.totalKnown && requestPageSize > 0) {
-                hasMore = result.page * requestPageSize < result.total;
-              }
-              searchModel->setHasMore(hasMore);
-              searchModel->setLoading(false);
-              self->setIsLoading(false);
+        searchModel->appendItems(result.items);
+        bool hasMore = result.hasMore;
+        if (result.totalKnown && requestPageSize > 0) {
+          hasMore = result.page * requestPageSize < result.total;
+        }
+        searchModel->setHasMore(hasMore);
+        searchModel->setLoading(false);
+        self->setIsLoading(false);
 
-              if (result.items.isEmpty() && result.page == 1) {
-                searchModel->setErrorMessage(
-                    QString("未找到“%1”相关视频").arg(requestKeyword));
-              }
-            });
+        if (result.items.isEmpty() && result.page == 1) {
+          searchModel->setErrorMessage(
+              QString("未找到“%1”相关视频").arg(requestKeyword));
+        }
       },
-      [self, searchModel](int, const QString &msg) {
-        if (!self || !searchModel) return;
+      [searchModel](BiliController *self, int, const QString &msg) {
+        if (!searchModel) return;
         searchModel->setLoading(false);
         searchModel->setErrorMessage(msg);
         self->setIsLoading(false);
         emit self->toastMessage(QString("UP 投稿搜索失败：%1").arg(msg));
-      },
-      true);
+      });
 }
 
 void BiliUpModule::searchMoreUpVideos() {
@@ -786,10 +786,10 @@ void BiliUpModule::fetchMoreUpVideos() {
     m_controller->m_seasonModule->fetchMoreUpSeasonVideos();
     return;
   }
-  if (!m_controller->m_upVideoHasMore || m_controller->m_upVideoModel->loading())
+  if (!m_upVideoHasMore || m_controller->m_upVideoModel->loading())
     return;
-  m_controller->m_upVideoPage++;
-  fetchUpVideos(m_controller->m_upUserMid, m_controller->m_upVideoPage);
+  m_upVideoPage++;
+  fetchUpVideos(m_controller->m_upUserMid, m_upVideoPage);
 }
 
 void BiliUpModule::fetchUpSeasons(qint64 mid) {
@@ -801,35 +801,64 @@ void BiliUpModule::fetchUpSeasons(qint64 mid) {
     m_controller->m_upUserMid = mid;
   }
 
+  // 首次请求重置分页
+  m_upSeasonListPage = 1;
+  m_upSeasonListHasMore = true;
+  fetchUpSeasonsPage(mid, 1);
+}
+
+void BiliUpModule::fetchMoreUpSeasons() {
+  if (!m_controller || !m_controller->m_upSeasonModel) return;
+  if (!m_upSeasonListHasMore || m_controller->m_upSeasonModel->loading()) return;
+  if (m_controller->m_upUserMid <= 0) return;
+  // 页码在成功回调中才推进，失败时无需回滚
+  fetchUpSeasonsPage(m_controller->m_upUserMid, m_upSeasonListPage + 1);
+}
+
+void BiliUpModule::fetchUpSeasonsPage(qint64 mid, int page) {
+  if (mid <= 0 || !m_controller->m_upSeasonModel) return;
+  if (m_controller->m_upSeasonModel->loading()) return;
+
+  page = qBound(1, page, 9999);
+  const int pageSize = 20;
+
   m_controller->m_upSeasonModel->setLoading(true);
 
   QMap<QString, QString> params;
   params["mid"] = QString::number(mid);
-  params["pn"] = "1";
-  params["ps"] = "20";
+  params["pn"] = QString::number(page);
+  params["ps"] = QString::number(pageSize);
 
-  QPointer<BiliController> self(m_controller);
-  m_controller->apiGet(
-      "/user/seasons", params,
-      [self, mid](const QJsonObject &data) {
-        if (!self || self->m_upUserMid != mid) return;
-        if (!self->m_upSeasonModel) return;
-        biliRunInWorker(
-            self, [data]() { return parseUpSeasonsPayload(data); },
-            [self, mid](QVector<UpSeasonItem> items) {
-              if (!self || self->m_upUserMid != mid || !self->m_upSeasonModel)
-                return;
-              self->m_upSeasonModel->setItems(items);
-              self->m_upSeasonModel->setLoading(false);
-            });
+  const int requestPage = page;
+  BiliListFetch::fetchParsed(
+      m_controller, BiliListFetch::Via::Api, "/user/seasons", params,
+      [mid](BiliController *self) {
+        if (self->m_upUserMid != mid) return false;
+        if (!self->m_upSeasonModel) return false;
+        return true;
       },
-      [self](int, const QString &msg) {
-        if (!self || !self->m_upSeasonModel) return;
+      [requestPage](const QJsonObject &data) {
+        return parseUpSeasonsPayload(data, requestPage, pageSize);
+      },
+      [this, mid](BiliController *self, ParsedUpSeasons result) {
+        if (self->m_upUserMid != mid || !self->m_upSeasonModel)
+          return;
+        if (result.page == 1) {
+          self->m_upSeasonModel->setItems(result.items);
+        } else {
+          self->m_upSeasonModel->appendItems(result.items);
+        }
+        m_upSeasonListPage = result.page;
+        m_upSeasonListHasMore = result.hasMore;
+        self->m_upSeasonModel->setHasMore(result.hasMore);
+        self->m_upSeasonModel->setLoading(false);
+      },
+      [](BiliController *self, int, const QString &msg) {
+        if (!self->m_upSeasonModel) return;
         self->m_upSeasonModel->setLoading(false);
         // 静默：合集列表失败不弹 toast，避免主页打扰
         Q_UNUSED(msg);
-      },
-      false);
+      });
 }
 
 void BiliUpModule::selectUpSeason(qint64 seasonId, const QString &name, bool isSeries, int total) {
@@ -855,11 +884,11 @@ void BiliUpModule::selectUpSeason(qint64 seasonId, const QString &name, bool isS
 
   if (seasonId == 0) {
     // 恢复为“视频”全部投稿
-    m_controller->m_upVideoPage = 1;
-    m_controller->m_upVideoHasMore = true;
-    m_controller->m_upVideoCursorNext = 0;
-    m_controller->m_upVideoCursorPrev = 0;
-    m_controller->m_upVideoHasPrevious = false;
+    m_upVideoPage = 1;
+    m_upVideoHasMore = true;
+    m_upVideoCursorNext = 0;
+    m_upVideoCursorPrev = 0;
+    m_upVideoHasPrevious = false;
     fetchUpVideos(m_controller->m_upUserMid, 1, 20);
   } else if (isSeries) {
     m_controller->m_upSeasonVideoPage = 1;
@@ -906,12 +935,12 @@ void BiliUpModule::toggleUpFollow() {
     emit m_controller->toastMessage("不能关注自己");
     return;
   }
-  if (m_controller->m_upFollowLoading) {
+  if (m_upFollowLoading) {
     return;
   }
 
   const bool targetFollow = !m_controller->m_upIsFollowing;
-  m_controller->m_upFollowLoading = true;
+  m_upFollowLoading = true;
 
   QMap<QString, QString> params;
   params["mid"] = QString::number(m_controller->m_upUserMid);
@@ -920,11 +949,11 @@ void BiliUpModule::toggleUpFollow() {
   QPointer<BiliController> self(m_controller);
   m_controller->apiGet(
       "/user/follow/toggle", params,
-      [self, targetFollow](const QJsonObject &data) {
+      [this, self, targetFollow](const QJsonObject &data) {
         if (!self)
           return;
 
-        self->m_upFollowLoading = false;
+        m_upFollowLoading = false;
 
         bool finalFollowState = targetFollow;
         if (data.contains("following")) {
@@ -948,10 +977,10 @@ void BiliUpModule::toggleUpFollow() {
 
         emit self->toastMessage(finalFollowState ? "关注成功" : "已取消关注");
       },
-      [self](int, const QString &msg) {
+      [this, self](int, const QString &msg) {
         if (!self)
           return;
-        self->m_upFollowLoading = false;
+        m_upFollowLoading = false;
         emit self->toastMessage(QString("关注操作失败：%1").arg(msg));
       },
       false);
@@ -979,12 +1008,17 @@ void BiliUpModule::playVideoPart(int index) {
 
 void BiliUpModule::restartGoServer() {
     emit m_controller->toastMessage("正在重启 Go 服务端...");
-    bili_stopApiServer();
-    if (bili_startApiServer()) {
-        emit m_controller->toastMessage("Go 服务端已重启");
-    } else {
-        emit m_controller->toastMessage("Go 服务端重启失败");
-    }
+    // 重启期间的新请求会在 BiliNetwork 中排队，完成后统一放行
+    BiliNetwork::instance()->setApiServerReady(false);
+    QPointer<BiliController> self(m_controller);
+    bili_restartApiServerAsync([self](bool ok) {
+        BiliNetwork *network = BiliNetwork::instance();
+        if (network) {
+            network->setApiServerReady(true);
+        }
+        if (!self) return;
+        emit self->toastMessage(ok ? "Go 服务端已重启" : "Go 服务端重启失败");
+    });
 }
 
 // ====== 下载到指定目录 ======

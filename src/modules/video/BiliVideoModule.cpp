@@ -549,11 +549,11 @@ void BiliVideoModule::reportCurrentVideoAsRecentViewIfNeeded() {
   const int currentDuration = currentPlaybackDuration(
       currentCid, m_controller->m_currentVideo.duration, m_controller->m_videoPartModel);
   QString reportKey = bvid + "#" + QString::number(currentCid);
-  if (m_controller->m_lastRecentViewReportKey == reportKey) {
+  if (m_lastRecentViewReportKey == reportKey) {
     refreshCurrentPlaybackProgress();
     return;
   }
-  m_controller->m_lastRecentViewReportKey = reportKey;
+  m_lastRecentViewReportKey = reportKey;
 
   QMap<QString, QString> playerInfoParams;
   playerInfoParams["aid"] = QString::number(aid);
@@ -563,7 +563,7 @@ void BiliVideoModule::reportCurrentVideoAsRecentViewIfNeeded() {
   QPointer<BiliController> self(m_controller);
   m_controller->m_network->get(
       "/video/player/info", playerInfoParams,
-      [self, reportKey, aid, currentCid, bvid, currentDuration](const QJsonObject &data) {
+      [this, self, reportKey, aid, currentCid, bvid, currentDuration](const QJsonObject &data) {
         if (!self)
           return;
 
@@ -585,19 +585,19 @@ void BiliVideoModule::reportCurrentVideoAsRecentViewIfNeeded() {
               if (!self)
                 return;
             },
-            [self, reportKey](int, const QString &) {
+            [this, self, reportKey](int, const QString &) {
               if (!self)
                 return;
-              if (self->m_lastRecentViewReportKey == reportKey) {
-                self->m_lastRecentViewReportKey.clear();
+              if (m_lastRecentViewReportKey == reportKey) {
+                m_lastRecentViewReportKey.clear();
               }
             });
       },
-      [self, reportKey](int, const QString &) {
+      [this, self, reportKey](int, const QString &) {
         if (!self)
           return;
-        if (self->m_lastRecentViewReportKey == reportKey) {
-          self->m_lastRecentViewReportKey.clear();
+        if (m_lastRecentViewReportKey == reportKey) {
+          m_lastRecentViewReportKey.clear();
         }
       });
 }

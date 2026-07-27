@@ -245,7 +245,7 @@ public:
   int upFansMedalLevel() const { return m_upFansMedalLevel; }
   bool upIsFollowing() const { return m_upIsFollowing; }
   int upVideoTotal() const { return m_upVideoTotal; }
-  int upLastWatchedRank() const { return m_upLastWatchedRank; }
+  int upLastWatchedRank() const;
   qint64 upSelectedSeasonId() const { return m_upSelectedSeasonId; }
   QString upSelectedSeasonName() const { return m_upSelectedSeasonName; }
   bool upSelectedDynamic() const { return m_upSelectedDynamic; }
@@ -278,6 +278,7 @@ public:
   QObject *search() const;
   QObject *favorite() const;
   BiliFavoriteModule *favoriteModule() const { return m_favoriteModule.get(); }
+  BiliSearchModule *searchModule() const { return m_searchModule.get(); }
   QObject *auth() const;
   QObject *video() const;
   QObject *playback() const;
@@ -539,15 +540,8 @@ private:
   QString m_upFansMedalName;
   int m_upFansMedalLevel = 0;
   bool m_upIsFollowing = false;
-  bool m_upFollowLoading = false;
   int m_upVideoTotal = 0;
-  int m_upLastWatchedRank = 0;
-  int m_upVideoPage = 1;
-  bool m_upVideoHasMore = true;
-  // APP 游标翻页：记录下一页游标（max/next）。用于修复“加载更多只拿到第一页”和新稿件插入导致的丢失。
-  qint64 m_upVideoCursorNext = 0;
-  qint64 m_upVideoCursorPrev = 0;
-  bool m_upVideoHasPrevious = false;
+  // 投稿分页/游标等状态已下沉到 BiliUpModule
   // UP 主合集筛选状态
   qint64 m_upSelectedSeasonId = 0;
   QString m_upSelectedSeasonName;
@@ -555,12 +549,7 @@ private:
   bool m_upSelectedDynamic = false;
   int m_upSeasonVideoPage = 1;
   bool m_upSeasonVideoHasMore = true;
-  QString m_lastRecentViewReportKey;
-  qint64 m_seasonVideoMid = 0;
-  qint64 m_seasonVideoSeasonId = 0;
-  int m_seasonVideoPage = 1;
-  bool m_seasonVideoHasMore = true;
-  bool m_seasonVideoOldestFirst = false;
+  // 合集浏览分页状态已下沉到 BiliSeasonModule，这里只留 seasonVideoTotal
   int m_seasonVideoTotal = 0;
   QString m_videoDetailLoadingBvid;
   QString m_relatedVideoBvid;

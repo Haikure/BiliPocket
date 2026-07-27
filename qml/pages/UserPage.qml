@@ -1,7 +1,5 @@
 import QtQuick 2.12
-import QtGraphicalEffects 1.12
 import BiliPlugin 1.0
-import "qrc:/qml/commons"
 import "../components" as Components
 import ".."
 
@@ -68,21 +66,6 @@ Rectangle {
         favView = 2
         // 延后到下一帧触发，避免进入详情时 UI 卡顿
         if (controller) Qt.callLater(function() { controller.favorite.fetchFavoriteItems(fid, 1, 20) })
-    }
-
-    function requestHistorySearchKeyboard() {
-        let component = qmlCreateComponent("YInputPage")
-        if (Component.Ready === component.status) {
-            var incubator = component.incubateObject(history_search_pop_helper.containerItem)
-            if (incubator.status !== Component.Ready) {
-                incubator.onStatusChanged = function(status) {
-                    if (status === Component.Ready)
-                        history_search_pop_helper.inputPageCreated(incubator.object)
-                }
-            } else {
-                history_search_pop_helper.inputPageCreated(incubator.object)
-            }
-        }
     }
 
     function doHistorySearch(keyword) {
@@ -228,7 +211,7 @@ Rectangle {
         showSearch: controller && controller.loggedIn && favView === 3
         anchors.top: parent.top
         onBackClicked: userPage.backInternal()
-        onSearchClicked: userPage.requestHistorySearchKeyboard()
+        onSearchClicked: historySearchKeyboard.open(userPage.recentHistoryKeyword)
     }
 
     // ====== 未登录：个人中心占位 ======
@@ -773,7 +756,7 @@ Rectangle {
 
     // ====== 个人资料和子页面 ======
     Item {
-        visible: (controller && controller.loggedIn) || favView === 4 || favView === 5
+        visible: (controller && controller.loggedIn) || favView === 4 || favView === 5 || favView === 6
         anchors.top: titleBar.bottom
         anchors.bottom: parent.bottom
         anchors.left: parent.left
@@ -819,25 +802,16 @@ Rectangle {
                             border.color: Theme.primary
                             border.width: 2
 
+                            // 圆形裁剪由 image provider 的 round/ 前缀完成，无需 OpacityMask
                             Image {
                                 id: userAvatarImage
                                 anchors.fill: parent
                                 anchors.margins: 2
+                                sourceSize: Qt.size(112, 112)
                                 source: controller && controller.userFace && userPage.profileImagesActive
-                                ? "image://bili/" + encodeURIComponent(controller.userFace) : ""
+                                ? "image://bili/round/size/112x112/" + encodeURIComponent(controller.userFace) : ""
                                 fillMode: Image.PreserveAspectCrop
                                 asynchronous: true
-                                visible: false
-                            }
-
-                            OpacityMask {
-                                anchors.fill: userAvatarImage
-                                source: userAvatarImage
-                                maskSource: Rectangle {
-                                    width: userAvatarImage.width
-                                    height: userAvatarImage.height
-                                    radius: Math.min(width, height) / 2
-                                }
                             }
                         }
 
@@ -1347,6 +1321,7 @@ Rectangle {
 
                             Image {
                                 anchors.fill: parent
+                                sourceSize: Qt.size(144, 104)
                                 source: model.cover && userPage.favoriteFolderImagesActive ? "image://bili/" + encodeURIComponent(model.cover) : ""
                                 fillMode: Image.PreserveAspectCrop
                                 asynchronous: true
@@ -1448,14 +1423,12 @@ Rectangle {
                             }
                         }
 
-                        ListView {
+                        Components.LoadMoreListView {
                             id: recentList
                             anchors.fill: parent
                             anchors.margins: Theme.spacingSmall
                             model: controller ? controller.history.recentHistoryModel() : null
-                            orientation: ListView.Horizontal
                             spacing: Theme.spacingMedium
-                            clip: true
                             onContentWidthChanged: {
                                 if (userPage.recentHistoryForceStart) contentX = 0
                             }
@@ -1470,29 +1443,16 @@ Rectangle {
                                 }
                             }
 
-                            // 性能参数对齐 HomePage
-                            cacheBuffer: 640
-                            displayMarginBeginning: 160
-                            displayMarginEnd: 160
-
-                            property bool _loadingMore: false
-                            onAtXEndChanged: {
-                                if (!atXEnd || !controller || _loadingMore) return
-                                if (recentList.contentWidth <= recentList.width + 2) return
-                                if (recentList.model && recentList.model.loading) return
-                                if (recentList.model && recentList.model.hasMore === false) return
-                                _loadingMore = true
-                                Qt.callLater(function() {
-                                    if (userPage.recentHistorySearchMode)
-                                        controller.history.searchMoreHistory()
-                                    else
-                                        controller.history.fetchMoreRecentHistory()
-                                    _loadingMore = false
-                                })
+                            onLoadMoreRequested: {
+                                if (!controller || !controller.history) return
+                                if (userPage.recentHistorySearchMode)
+                                    controller.history.searchMoreHistory()
+                                else
+                                    controller.history.fetchMoreRecentHistory()
                             }
 
                             delegate: Item {
-                                width: 105
+                                width: Theme.cardWidth
                                 height: recentList.height
 
                                 Components.VideoCardCompact {
@@ -1725,18 +1685,16 @@ Rectangle {
                     Item {
                         anchors.fill: parent
 
-                        ListView {
+                        Components.LoadMoreListView {
                             id: favItems
                             anchors.fill: parent
                             anchors.margins: Theme.spacingSmall
                             model: controller ? controller.favorite.favoriteItemModel() : null
-                            orientation: ListView.Horizontal
                             spacing: Theme.spacingMedium
-                            clip: true
 
-                            cacheBuffer: 640
-                            displayMarginBeginning: 160
-                            displayMarginEnd: 160
+                            onLoadMoreRequested: {
+                                if (controller && controller.favorite) controller.favorite.fetchMoreFavoriteItems()
+                            }
 
                             delegate: Components.VideoCardCompact {
                                 height: favItems.height
@@ -1766,19 +1724,6 @@ Rectangle {
                                     }
                                 }
                             }
-
-                            property bool _loadingMore: false
-                            onAtXEndChanged: {
-                                if (!atXEnd || !controller || _loadingMore) return
-                                if (favItems.contentWidth <= favItems.width + 2) return
-                                if (favItems.model && favItems.model.loading) return
-                                if (favItems.model && favItems.model.hasMore === false) return
-                                _loadingMore = true
-                                Qt.callLater(function() {
-                                    controller.favorite.fetchMoreFavoriteItems()
-                                    _loadingMore = false
-                                })
-                            }
                         }
 
                         Text {
@@ -1801,30 +1746,11 @@ Rectangle {
         }
     }
 
-    YPagePopHelper {
-        id: history_search_pop_helper
-        z: 99
-
-        function inputPageCreated(keyboardPage) {
-            keyboardPage.backButtonClicked.connect(function() {
-                qmlGlobal.inputPageShowing = false
-                keyboardPage.todoDestroy()
-                keyboardPage = null
-            })
-
-            keyboardPage.inputFinished.connect(function(content) {
-                qmlGlobal.inputPageShowing = false
-                keyboardPage.todoDestroy()
-                userPage.doHistorySearch(content)
-            })
-
-            keyboardPage.enterText(userPage.recentHistoryKeyword)
-            keyboardPage.show()
-            qmlGlobal.inputPageShowing = true
-        }
-
-        isShowing: qmlGlobal.inputPageShowing
+    Components.VirtualKeyboardInput {
+        id: historySearchKeyboard
         objectName: "from_UserPage_history_search"
+        // 空串也有效（用于清空搜索），故不做 trim/空判断
+        onAccepted: userPage.doHistorySearch(content)
     }
 
 }

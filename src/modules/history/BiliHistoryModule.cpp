@@ -2,6 +2,7 @@
 
 #include "BiliAsyncUtils.hpp"
 #include "BiliController.h"
+#include "BiliListFetch.hpp"
 #include "BiliModels.h"
 #include "modules/favorite/BiliFavoriteModule.h"
 #include "BiliNetwork.h"
@@ -168,26 +169,19 @@ void BiliHistoryModule::fetchRecentHistory() {
   controller->setIsLoading(true);
 
   QMap<QString, QString> params;
-  QPointer<BiliController> self(controller);
-  controller->network()->get(
-      "/history/recent", params,
-      [this, self](const QJsonObject &data) {
-        if (!self) return;
-        biliRunInWorker(
-            self, [data]() { return parseRecentHistoryPayload(data); },
-            [this, self](ParsedRecentHistory result) {
-              if (!self)
-                return;
-              m_recentHistoryMax = result.max;
-              m_recentHistoryViewAt = result.viewAt;
-              self->recentHistoryListModel()->appendItems(result.items);
-              self->recentHistoryListModel()->setHasMore(!result.items.isEmpty());
-              self->recentHistoryListModel()->setLoading(false);
-              self->setIsLoading(false);
-            });
+  BiliListFetch::fetchParsed(
+      controller, BiliListFetch::Via::Network, "/history/recent", params,
+      BiliListFetch::acceptAlways,
+      [](const QJsonObject &data) { return parseRecentHistoryPayload(data); },
+      [this](BiliController *self, ParsedRecentHistory result) {
+        m_recentHistoryMax = result.max;
+        m_recentHistoryViewAt = result.viewAt;
+        self->recentHistoryListModel()->appendItems(result.items);
+        self->recentHistoryListModel()->setHasMore(!result.items.isEmpty());
+        self->recentHistoryListModel()->setLoading(false);
+        self->setIsLoading(false);
       },
-      [self](int, const QString &msg) {
-        if (!self) return;
+      [](BiliController *self, int, const QString &msg) {
         self->recentHistoryListModel()->setLoading(false);
         self->setIsLoading(false);
         emit self->toastMessage(QString("最近观看加载失败：%1").arg(msg));
@@ -211,26 +205,19 @@ void BiliHistoryModule::fetchMoreRecentHistory() {
   controller->recentHistoryListModel()->setLoading(true);
   controller->setIsLoading(true);
 
-  QPointer<BiliController> self(controller);
-  controller->network()->get(
-      "/history/recent", params,
-      [this, self](const QJsonObject &data) {
-        if (!self) return;
-        biliRunInWorker(
-            self, [data]() { return parseRecentHistoryPayload(data); },
-            [this, self](ParsedRecentHistory result) {
-              if (!self)
-                return;
-              m_recentHistoryMax = result.max;
-              m_recentHistoryViewAt = result.viewAt;
-              self->recentHistoryListModel()->appendItems(result.items);
-              self->recentHistoryListModel()->setHasMore(!result.items.isEmpty());
-              self->recentHistoryListModel()->setLoading(false);
-              self->setIsLoading(false);
-            });
+  BiliListFetch::fetchParsed(
+      controller, BiliListFetch::Via::Network, "/history/recent", params,
+      BiliListFetch::acceptAlways,
+      [](const QJsonObject &data) { return parseRecentHistoryPayload(data); },
+      [this](BiliController *self, ParsedRecentHistory result) {
+        m_recentHistoryMax = result.max;
+        m_recentHistoryViewAt = result.viewAt;
+        self->recentHistoryListModel()->appendItems(result.items);
+        self->recentHistoryListModel()->setHasMore(!result.items.isEmpty());
+        self->recentHistoryListModel()->setLoading(false);
+        self->setIsLoading(false);
       },
-      [self](int, const QString &msg) {
-        if (!self) return;
+      [](BiliController *self, int, const QString &msg) {
         self->recentHistoryListModel()->setLoading(false);
         self->setIsLoading(false);
         emit self->toastMessage(QString("最近观看加载失败：%1").arg(msg));
@@ -269,28 +256,24 @@ void BiliHistoryModule::searchHistory(const QString &keyword, int page) {
   params["keyword"] = kw;
   params["pn"] = QString::number(page);
 
-  QPointer<BiliController> self(controller);
-  controller->network()->get(
-      "/history/search", params,
-      [this, self, page](const QJsonObject &data) {
-        if (!self) return;
-        biliRunInWorker(
-            self, [data, page]() { return parseHistorySearchPayload(data, page, 20); },
-            [this, self](ParsedHistorySearch result) {
-              if (!self) return;
-              m_historySearchPage = result.page;
-              m_historySearchHasMore = result.hasMore;
-              self->recentHistoryListModel()->appendItems(result.items);
-              self->recentHistoryListModel()->setHasMore(result.hasMore);
-              self->recentHistoryListModel()->setLoading(false);
-              self->setIsLoading(false);
-              if (result.items.isEmpty() && result.page == 1) {
-                self->recentHistoryListModel()->setErrorMessage("未找到相关历史");
-              }
-            });
+  BiliListFetch::fetchParsed(
+      controller, BiliListFetch::Via::Network, "/history/search", params,
+      BiliListFetch::acceptAlways,
+      [page](const QJsonObject &data) {
+        return parseHistorySearchPayload(data, page, 20);
       },
-      [self](int, const QString &msg) {
-        if (!self) return;
+      [this](BiliController *self, ParsedHistorySearch result) {
+        m_historySearchPage = result.page;
+        m_historySearchHasMore = result.hasMore;
+        self->recentHistoryListModel()->appendItems(result.items);
+        self->recentHistoryListModel()->setHasMore(result.hasMore);
+        self->recentHistoryListModel()->setLoading(false);
+        self->setIsLoading(false);
+        if (result.items.isEmpty() && result.page == 1) {
+          self->recentHistoryListModel()->setErrorMessage("未找到相关历史");
+        }
+      },
+      [](BiliController *self, int, const QString &msg) {
         self->recentHistoryListModel()->setLoading(false);
         self->setIsLoading(false);
         self->recentHistoryListModel()->setErrorMessage(msg);
@@ -368,33 +351,25 @@ void BiliHistoryModule::fetchWatchLater(int page, int pageSize) {
   params["pn"] = QString::number(page);
   params["ps"] = QString::number(pageSize);
 
-  QPointer<BiliController> self(controller);
-  controller->network()->get(
-      "/toview/list", params,
-      [this, self, page, pageSize](const QJsonObject &data) {
-        if (!self) return;
-        biliRunInWorker(
-            self,
-            [data, page, pageSize]() {
-              return parseWatchLaterPayload(data, page, pageSize);
-            },
-            [this, self](ParsedWatchLater result) {
-              if (!self)
-                return;
-              m_watchLaterPage = result.page;
-              m_watchLaterHasMore = result.hasMore;
-              self->watchLaterListModel()->appendItems(result.items);
-              self->watchLaterListModel()->setHasMore(result.hasMore);
-              self->watchLaterListModel()->setLoading(false);
-              self->setIsLoading(false);
-
-              if (result.items.isEmpty() && result.page == 1) {
-                self->watchLaterListModel()->setErrorMessage("暂无稍后再看");
-              }
-            });
+  BiliListFetch::fetchParsed(
+      controller, BiliListFetch::Via::Network, "/toview/list", params,
+      BiliListFetch::acceptAlways,
+      [page, pageSize](const QJsonObject &data) {
+        return parseWatchLaterPayload(data, page, pageSize);
       },
-      [self](int, const QString &msg) {
-        if (!self) return;
+      [this](BiliController *self, ParsedWatchLater result) {
+        m_watchLaterPage = result.page;
+        m_watchLaterHasMore = result.hasMore;
+        self->watchLaterListModel()->appendItems(result.items);
+        self->watchLaterListModel()->setHasMore(result.hasMore);
+        self->watchLaterListModel()->setLoading(false);
+        self->setIsLoading(false);
+
+        if (result.items.isEmpty() && result.page == 1) {
+          self->watchLaterListModel()->setErrorMessage("暂无稍后再看");
+        }
+      },
+      [](BiliController *self, int, const QString &msg) {
         self->watchLaterListModel()->setLoading(false);
         self->setIsLoading(false);
         self->watchLaterListModel()->setErrorMessage(msg);
@@ -410,6 +385,40 @@ void BiliHistoryModule::fetchMoreWatchLater() {
   if (controller->watchLaterListModel()->count() <= 0)
     return;
   fetchWatchLater(m_watchLaterPage + 1, 20);
+}
+
+void BiliHistoryModule::deleteWatchLaterItem(int row, qint64 aid) {
+  BiliController *controller = m_controller;
+  if (!controller) return;
+  if (!controller->loggedIn()) {
+    emit controller->toastMessage("请先登录后删除稍后再看");
+    return;
+  }
+  if (aid <= 0) {
+    emit controller->toastMessage("视频信息不完整，无法删除");
+    return;
+  }
+
+  QMap<QString, QString> params;
+  params["aid"] = QString::number(aid);
+  QPointer<BiliController> self(controller);
+  controller->network()->get(
+      "/toview/del", params,
+      [self, row, aid](const QJsonObject &) {
+        if (!self) return;
+        // 优先按 aid 定位，避免请求期间列表变动导致行号错位
+        int index = self->watchLaterListModel()->indexOfAid(aid);
+        if (index < 0) index = row;
+        self->watchLaterListModel()->removeAt(index);
+        if (self->videoAid() == aid) {
+          self->setWatchLaterState(false);
+        }
+        emit self->toastMessage("已从稍后再看移除");
+      },
+      [self](int, const QString &msg) {
+        if (!self) return;
+        emit self->toastMessage(QString("删除稍后再看失败：%1").arg(msg));
+      });
 }
 
 void BiliHistoryModule::addToWatchLater() {

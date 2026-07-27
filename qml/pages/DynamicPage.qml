@@ -15,7 +15,6 @@ Rectangle {
     property var dynamicModel: controller ? controller.feed.dynamicModel() : null
     property bool initialRequested: false
     property bool revealReady: false
-    property bool loadingMore: false
     readonly property bool imagesActive: visible
 
     signal backClicked()
@@ -76,7 +75,7 @@ Rectangle {
         }
     }
 
-    ListView {
+    Components.LoadMoreListView {
         id: dynamicList
         anchors.fill: parent
         anchors.leftMargin: 6
@@ -84,11 +83,12 @@ Rectangle {
         anchors.topMargin: 4
         anchors.bottomMargin: 4
         model: dynamicModel
+        orientation: ListView.Vertical
         spacing: 5
-        clip: true
+        // 纵向流：cacheBuffer/displayMargin 需覆盖横向默认值
         cacheBuffer: 360
         displayMarginBeginning: 120
-        displayMarginEnd: 160
+        displayMarginEnd: Theme.listDisplayMargin
 
         header: Item {
             width: dynamicList.width
@@ -102,11 +102,21 @@ Rectangle {
                 spacing: 6
 
                 Text {
+                    id: dynamicTitleText
                     text: "动态"
-                    color: Theme.textPrimary
+                    color: titleRefreshArea.pressed ? Theme.primary : Theme.textPrimary
                     font.family: Theme.fontFamily
                     font.pixelSize: Theme.fontTitle
                     font.bold: true
+
+                    // 点击标题强制刷新；加载中禁用防止重复触发
+                    MouseArea {
+                        id: titleRefreshArea
+                        anchors.fill: parent
+                        anchors.margins: -6
+                        enabled: !(dynamicModel && dynamicModel.loading)
+                        onClicked: dynamicPage.requestInitial(true)
+                    }
                 }
 
                 Rectangle {
@@ -176,14 +186,8 @@ Rectangle {
             }
         }
 
-        onAtYEndChanged: {
-            if (!atYEnd || !controller || !dynamicModel || loadingMore) return
-            if (!dynamicModel.hasMore || dynamicModel.loading || dynamicModel.count <= 0) return
-            loadingMore = true
-            Qt.callLater(function() {
-                controller.feed.fetchMoreDynamic()
-                loadingMore = false
-            })
+        onLoadMoreRequested: {
+            if (controller && controller.feed) controller.feed.fetchMoreDynamic()
         }
     }
 

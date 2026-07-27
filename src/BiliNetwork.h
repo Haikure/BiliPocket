@@ -3,6 +3,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QMap>
 #include <QMutex>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
@@ -45,6 +46,9 @@ public:
   // 获取 API 地址
   QString apiBase() const;
 
+  // 未就绪时 get() 请求进入队列，就绪后自动发出（仅主线程调用）
+  void setApiServerReady(bool ready);
+
   // 取消所有正在进行的请求
   Q_INVOKABLE void cancelAllRequests();
   // 单独取消视频下载
@@ -70,10 +74,27 @@ private:
   bool checkRateLimit();
   void trackReply(QNetworkReply *reply);
   void untrackReply(QNetworkReply *reply);
+  void flushPendingRequests();
 
   QNetworkAccessManager *m_nam;
   QString m_apiBase;
   int m_requestTimeout;
+
+  // 就绪前的请求排队
+  struct PendingRequest {
+    QString path;
+    QMap<QString, QString> params;
+    SuccessCallback onSuccess;
+    ErrorCallback onError;
+  };
+  bool m_apiServerReady = true;
+  QVector<PendingRequest> m_pendingRequests;
+  static constexpr int MAX_PENDING_REQUESTS = 32;
+  // 关闸兜底：上游 bring-up 若因重入/销毁丢了完成回调，闸门会永远关着，
+  // 表现为界面一直"加载中"且一个请求都不发。超时后强制放行。
+  // 必须大于 bring-up 看门狗(45s)，否则慢启动会被提前开闸、请求白白失败。
+  int m_readyGateGeneration = 0;
+  static constexpr int READY_GATE_TIMEOUT_MS = 60000;
 
   // 请求跟踪（用于取消和防止泄漏）
   QMutex m_replyMutex;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QObject>
+#include <QVector>
 #include <QtGlobal>
 
 class BiliController;
@@ -26,9 +27,15 @@ public:
   void resetLoadingState();
 
 private:
+  // 小并发获取封面，避免一次性并发触发限流
+  void startFolderCoverQueue(QVector<qint64> mediaIds);
+  void fetchNextFolderCover();
+
   BiliController *m_controller;
   int m_favoritePage = 1;
   qint64 m_currentFavoriteId = 0;
+  QVector<qint64> m_coverQueue;
+  int m_coverGeneration = 0;
   qint64 m_favoriteStatusLoadingAid = 0;
   qint64 m_coinStatusLoadingAid = 0;
   qint64 m_likeStatusLoadingAid = 0;

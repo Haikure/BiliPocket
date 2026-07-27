@@ -20,6 +20,12 @@ Rectangle {
     property bool watchLaterRevealPlayed: false
     readonly property bool watchLaterImagesActive: visible
 
+    // 长按删除
+    property int pendingDeleteIndex: -1
+    property string pendingDeleteTitle: ""
+    property var pendingDeleteAid: 0
+    property bool deleteConfirmVisible: false
+
     signal backClicked()
     signal videoSelected(string bvid)
 
@@ -92,14 +98,12 @@ Rectangle {
         Behavior on opacity { NumberAnimation { duration: Theme.animNormal; easing.type: Easing.OutQuad } }
         Behavior on x { NumberAnimation { duration: Theme.animNormal; easing.type: Easing.OutQuad } }
 
-        ListView {
+        Components.LoadMoreListView {
             id: watchLaterList
             anchors.fill: parent
             anchors.margins: Theme.spacingSmall
             model: watchLaterModel
-            orientation: ListView.Horizontal
             spacing: Theme.spacingMedium
-            clip: true
             interactive: watchLaterContentReady
             onContentWidthChanged: {
                 if (watchLaterInitialLoadPending && !watchLaterPage.restoreWatchLaterOnShow && watchLaterPage.watchLaterForceStart) contentX = 0
@@ -116,20 +120,10 @@ Rectangle {
                 }
             }
 
-            cacheBuffer: 640
-            displayMarginBeginning: 160
-            displayMarginEnd: 160
+            onLoadMoreRequested: if (controller) controller.history.fetchMoreWatchLater()
 
-            property bool _loadingMore: false
-            onAtXEndChanged: {
-                if (!atXEnd || !controller || _loadingMore) return
-                _loadingMore = true
-                Qt.callLater(function() {
-                    controller.history.fetchMoreWatchLater()
-                    _loadingMore = false
-                })
-            }
-
+            // MouseArea 作为卡片子项覆盖在最上层，保持 VideoCardCompact 仍是 delegate 根
+            // （reuseItems 的 ListView.onPooled/onReused 只在 delegate 根上生效）
             delegate: Components.VideoCardCompact {
                 height: watchLaterList.height
                 videoTitle: model.title || ""
@@ -141,11 +135,22 @@ Rectangle {
                 durationText: model.durationText || ""
                 bvid: model.bvid || ""
                 partCount: model.partCount || 1
-                onClicked: {
-                    watchLaterPage.watchLaterContentX = watchLaterList.contentX
-                    watchLaterPage.restoreWatchLaterOnShow = true
-                    watchLaterPage.watchLaterForceStart = false
-                    watchLaterPage.videoSelected(bvid)
+
+                MouseArea {
+                    anchors.fill: parent
+                    pressAndHoldInterval: 550
+                    onClicked: {
+                        watchLaterPage.watchLaterContentX = watchLaterList.contentX
+                        watchLaterPage.restoreWatchLaterOnShow = true
+                        watchLaterPage.watchLaterForceStart = false
+                        watchLaterPage.videoSelected(model.bvid || "")
+                    }
+                    onPressAndHold: {
+                        watchLaterPage.pendingDeleteIndex = index
+                        watchLaterPage.pendingDeleteTitle = model.title || ""
+                        watchLaterPage.pendingDeleteAid = model.aid || 0
+                        watchLaterPage.deleteConfirmVisible = true
+                    }
                 }
             }
         }
@@ -155,6 +160,78 @@ Rectangle {
             text: "暂无稍后再看"
             color: Theme.textTertiary
             anchors.centerIn: parent
+        }
+
+        // 长按删除确认框
+        Rectangle {
+            visible: opacity > 0
+            opacity: watchLaterPage.deleteConfirmVisible ? 1 : 0
+            scale: watchLaterPage.deleteConfirmVisible ? 1 : 0.92
+            anchors.centerIn: parent
+            width: 210
+            height: 96
+            radius: Theme.radiusLarge
+            color: Theme.bgSecondary
+            border.color: Theme.withAlpha(Theme.error, 0.55)
+            z: 40
+            Behavior on opacity { NumberAnimation { duration: Theme.animFast; easing.type: Easing.OutQuad } }
+            Behavior on scale { NumberAnimation { duration: Theme.animFast; easing.type: Easing.OutBack } }
+
+            Column {
+                anchors.fill: parent
+                anchors.margins: 10
+                spacing: 7
+
+                Text {
+                    width: parent.width
+                    text: "从稍后再看移除？"
+                    color: Theme.textPrimary
+                    font.family: Theme.fontFamily
+                    font.pixelSize: Theme.fontMedium
+                    font.bold: true
+                    horizontalAlignment: Text.AlignHCenter
+                }
+
+                Text {
+                    width: parent.width
+                    text: watchLaterPage.pendingDeleteTitle
+                    color: Theme.textSecondary
+                    font.family: Theme.fontFamily
+                    font.pixelSize: Theme.fontSmall
+                    elide: Text.ElideRight
+                    horizontalAlignment: Text.AlignHCenter
+                }
+
+                Row {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    spacing: 10
+                    Rectangle {
+                        width: 70
+                        height: 24
+                        radius: 12
+                        color: cancelDeleteArea.pressed ? Theme.bgTertiary : Theme.withAlpha(Theme.textSecondary, 0.12)
+                        Text { anchors.centerIn: parent; text: "取消"; color: Theme.textSecondary; font.family: Theme.fontFamily; font.pixelSize: Theme.fontSmall }
+                        MouseArea { id: cancelDeleteArea; anchors.fill: parent; onClicked: watchLaterPage.deleteConfirmVisible = false }
+                    }
+                    Rectangle {
+                        width: 70
+                        height: 24
+                        radius: 12
+                        color: confirmDeleteArea.pressed ? Theme.withAlpha(Theme.error, 0.35) : Theme.withAlpha(Theme.error, 0.2)
+                        Text { anchors.centerIn: parent; text: "删除"; color: Theme.error; font.family: Theme.fontFamily; font.pixelSize: Theme.fontSmall; font.bold: true }
+                        MouseArea {
+                            id: confirmDeleteArea
+                            anchors.fill: parent
+                            onClicked: {
+                                watchLaterPage.deleteConfirmVisible = false
+                                if (controller && controller.history) {
+                                    controller.history.deleteWatchLaterItem(watchLaterPage.pendingDeleteIndex, Number(watchLaterPage.pendingDeleteAid))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 

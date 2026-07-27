@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -62,8 +63,6 @@ func main() {
 		logWarn("未加载到本地 Cookie 缓存: %s", err.Error())
 	}
 
-	globalClient.Init()
-
 	mux := http.NewServeMux()
 	setupRoutes(mux)
 
@@ -79,6 +78,19 @@ func main() {
 		IdleTimeout:       120 * time.Second,
 		MaxHeaderBytes:    1 << 20, // 1 MiB
 	}
+
+	// 先占端口再对外服务：Init() 里是 4 个串行的 B 站网络请求，若放在 Listen
+	// 之前，插件侧的 TCP 就绪探测会误判成"启动失败"；若放在 Serve 之前同步执行，
+	// 端口虽可连但 HTTP 还没 accept，客户端 10s 超时会直接失败。
+	// 因此：Listen -> 后台 Init -> Serve，探测与真实请求都能立刻进来。
+	ln, err := net.Listen("tcp", srv.Addr)
+	if err != nil {
+		logError("❌ 监听失败: %s", err.Error())
+		_ = asyncLogFlush(asyncLogShutdownTimeout)
+		os.Exit(1)
+	}
+
+	go globalClient.Init()
 
 	// 退出：用 Shutdown 替代 os.Exit，让正在处理的请求有机会完成
 	sigChan := make(chan os.Signal, 1)
@@ -104,7 +116,7 @@ func main() {
 
 	printEndpoints(host, port)
 
-	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
 		logError("❌ 启动失败: %s", err.Error())
 		_ = asyncLogFlush(asyncLogShutdownTimeout)
 		os.Exit(1)

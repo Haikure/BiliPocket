@@ -11,6 +11,11 @@ ErrorOverlay 1.0 components/ErrorOverlay.qml
 Toast 1.0 components/Toast.qml
 IconButton 1.0 components/IconButton.qml
 DynamicFeedCard 1.0 components/DynamicFeedCard.qml
+VideoPartCard 1.0 components/VideoPartCard.qml
+LoadMoreListView 1.0 components/LoadMoreListView.qml
+SkeletonPill 1.0 components/SkeletonPill.qml
+PopupStack 1.0 components/PopupStack.qml
+VirtualKeyboardInput 1.0 components/VirtualKeyboardInput.qml
 
 # Pages
 HomePage 1.0 pages/HomePage.qml
@@ -22,3 +27,10 @@ RankingPage 1.0 pages/RankingPage.qml
 DynamicPage 1.0 pages/DynamicPage.qml
 DynamicDetailPage 1.0 pages/DynamicDetailPage.qml
 UserPage 1.0 pages/UserPage.qml
+ToggleRow 1.0 components/ToggleRow.qml
+StepperRow 1.0 components/StepperRow.qml
+
+SettingsPage 1.0 pages/SettingsPage.qml
+UpUserPage 1.0 pages/UpUserPage.qml
+VideoSeasonPage 1.0 pages/VideoSeasonPage.qml
+WatchLaterPage 1.0 pages/WatchLaterPage.qml

@@ -86,196 +86,28 @@ Rectangle {
                 width: parent.width
                 spacing: Theme.spacingSmall
 
-                Rectangle {
+                Components.ToggleRow {
                     width: parent.width
-                    height: 52
-                    radius: Theme.radiusMedium
-                    color: Theme.bgSecondary
-                    border.color: Theme.withAlpha(Theme.primary, 0.12)
-                    border.width: 1
-
-                    Row {
-                        anchors.fill: parent
-                        anchors.margins: 6
-                        spacing: 8
-
-                        Column {
-                            width: parent.width - 112
-                            spacing: 3
-                            anchors.verticalCenter: parent.verticalCenter
-
-                            Text {
-                                text: "离屏占位"
-                                color: Theme.textPrimary
-                                font.family: Theme.fontFamily
-                                font.pixelSize: 11
-                                font.bold: true
-                            }
-
-                            Text {
-                                width: parent.width
-                                text: "已加载卡片滚出视野后退回 Canvas 占位"
-                                color: Theme.textTertiary
-                                font.family: Theme.fontFamily
-                                font.pixelSize: 9
-                                elide: Text.ElideRight
-                            }
-                        }
-
-                        Rectangle {
-                            width: 44; height: 24; radius: 6
-                            color: controller && controller.videoCardOffscreenPlaceholderEnabled ? Theme.withAlpha(Theme.primary, 0.25) : Theme.bgTertiary
-                            border.width: 1
-                            border.color: controller && controller.videoCardOffscreenPlaceholderEnabled ? Theme.primary : Theme.withAlpha(Theme.primary, 0.16)
-                            anchors.verticalCenter: parent.verticalCenter
-                            Text { anchors.centerIn: parent; text: "开"; color: Theme.textPrimary; font.family: Theme.fontFamily; font.pixelSize: 10 }
-                            MouseArea {
-                                anchors.fill: parent
-                                onClicked: { if (controller) controller.playback.setVideoCardOffscreenPlaceholderEnabled(true) }
-                            }
-                        }
-
-                        Rectangle {
-                            width: 44; height: 24; radius: 6
-                            color: controller && !controller.videoCardOffscreenPlaceholderEnabled ? Theme.withAlpha(Theme.primary, 0.25) : Theme.bgTertiary
-                            border.width: 1
-                            border.color: controller && !controller.videoCardOffscreenPlaceholderEnabled ? Theme.primary : Theme.withAlpha(Theme.primary, 0.16)
-                            anchors.verticalCenter: parent.verticalCenter
-                            Text { anchors.centerIn: parent; text: "关"; color: Theme.textPrimary; font.family: Theme.fontFamily; font.pixelSize: 10 }
-                            MouseArea {
-                                anchors.fill: parent
-                                onClicked: { if (controller) controller.playback.setVideoCardOffscreenPlaceholderEnabled(false) }
-                            }
-                        }
-                    }
+                    label: "离屏占位"
+                    description: "已加载卡片滚出视野后退回 Canvas 占位"
+                    checked: controller ? controller.videoCardOffscreenPlaceholderEnabled : undefined
+                    onToggled: { if (controller) controller.playback.setVideoCardOffscreenPlaceholderEnabled(value) }
                 }
 
-                Rectangle {
+                Components.ToggleRow {
                     width: parent.width
-                    height: 52
-                    radius: Theme.radiusMedium
-                    color: Theme.bgSecondary
-                    border.color: Theme.withAlpha(Theme.primary, 0.12)
-                    border.width: 1
-
-                    Row {
-                        anchors.fill: parent
-                        anchors.margins: 6
-                        spacing: 8
-
-                        Column {
-                            width: parent.width - 112
-                            spacing: 3
-                            anchors.verticalCenter: parent.verticalCenter
-
-                            Text {
-                                text: "启用预加载"
-                                color: Theme.textPrimary
-                                font.family: Theme.fontFamily
-                                font.pixelSize: 11
-                                font.bold: true
-                            }
-
-                            Text {
-                                width: parent.width
-                                text: "详情预热评论/字幕/推荐，UP页预取视频"
-                                color: Theme.textTertiary
-                                font.family: Theme.fontFamily
-                                font.pixelSize: 9
-                                elide: Text.ElideRight
-                            }
-                        }
-
-                        Rectangle {
-                            width: 44; height: 24; radius: 6
-                            color: controller && controller.videoDetailPreloadEnabled ? Theme.withAlpha(Theme.primary, 0.25) : Theme.bgTertiary
-                            border.width: 1
-                            border.color: controller && controller.videoDetailPreloadEnabled ? Theme.primary : Theme.withAlpha(Theme.primary, 0.16)
-                            anchors.verticalCenter: parent.verticalCenter
-                            Text { anchors.centerIn: parent; text: "开"; color: Theme.textPrimary; font.family: Theme.fontFamily; font.pixelSize: 10 }
-                            MouseArea {
-                                anchors.fill: parent
-                                onClicked: { if (controller) controller.playback.setVideoDetailPreloadEnabled(true) }
-                            }
-                        }
-
-                        Rectangle {
-                            width: 44; height: 24; radius: 6
-                            color: controller && !controller.videoDetailPreloadEnabled ? Theme.withAlpha(Theme.primary, 0.25) : Theme.bgTertiary
-                            border.width: 1
-                            border.color: controller && !controller.videoDetailPreloadEnabled ? Theme.primary : Theme.withAlpha(Theme.primary, 0.16)
-                            anchors.verticalCenter: parent.verticalCenter
-                            Text { anchors.centerIn: parent; text: "关"; color: Theme.textPrimary; font.family: Theme.fontFamily; font.pixelSize: 10 }
-                            MouseArea {
-                                anchors.fill: parent
-                                onClicked: { if (controller) controller.playback.setVideoDetailPreloadEnabled(false) }
-                            }
-                        }
-                    }
+                    label: "启用预加载"
+                    description: "详情预热评论/字幕/推荐，UP页预取视频"
+                    checked: controller ? controller.videoDetailPreloadEnabled : undefined
+                    onToggled: { if (controller) controller.playback.setVideoDetailPreloadEnabled(value) }
                 }
 
-                Rectangle {
+                Components.ToggleRow {
                     width: parent.width
-                    height: 52
-                    radius: Theme.radiusMedium
-                    color: Theme.bgSecondary
-                    border.color: Theme.withAlpha(Theme.primary, 0.12)
-                    border.width: 1
-
-                    Row {
-                        anchors.fill: parent
-                        anchors.margins: 6
-                        spacing: 8
-
-                        Column {
-                            width: parent.width - 112
-                            spacing: 3
-                            anchors.verticalCenter: parent.verticalCenter
-
-                            Text {
-                                text: "默认字幕"
-                                color: Theme.textPrimary
-                                font.family: Theme.fontFamily
-                                font.pixelSize: 11
-                                font.bold: true
-                            }
-
-                            Text {
-                                width: parent.width
-                                text: "打开视频时自动选中第一个中文字幕"
-                                color: Theme.textTertiary
-                                font.family: Theme.fontFamily
-                                font.pixelSize: 9
-                                elide: Text.ElideRight
-                            }
-                        }
-
-                        Rectangle {
-                            width: 44; height: 24; radius: 6
-                            color: controller && controller.defaultSubtitleEnabled ? Theme.withAlpha(Theme.primary, 0.25) : Theme.bgTertiary
-                            border.width: 1
-                            border.color: controller && controller.defaultSubtitleEnabled ? Theme.primary : Theme.withAlpha(Theme.primary, 0.16)
-                            anchors.verticalCenter: parent.verticalCenter
-                            Text { anchors.centerIn: parent; text: "开"; color: Theme.textPrimary; font.family: Theme.fontFamily; font.pixelSize: 10 }
-                            MouseArea {
-                                anchors.fill: parent
-                                onClicked: { if (controller) controller.playback.setDefaultSubtitleEnabled(true) }
-                            }
-                        }
-
-                        Rectangle {
-                            width: 44; height: 24; radius: 6
-                            color: controller && !controller.defaultSubtitleEnabled ? Theme.withAlpha(Theme.primary, 0.25) : Theme.bgTertiary
-                            border.width: 1
-                            border.color: controller && !controller.defaultSubtitleEnabled ? Theme.primary : Theme.withAlpha(Theme.primary, 0.16)
-                            anchors.verticalCenter: parent.verticalCenter
-                            Text { anchors.centerIn: parent; text: "关"; color: Theme.textPrimary; font.family: Theme.fontFamily; font.pixelSize: 10 }
-                            MouseArea {
-                                anchors.fill: parent
-                                onClicked: { if (controller) controller.playback.setDefaultSubtitleEnabled(false) }
-                            }
-                        }
-                    }
+                    label: "默认字幕"
+                    description: "打开视频时自动选中第一个中文字幕"
+                    checked: controller ? controller.defaultSubtitleEnabled : undefined
+                    onToggled: { if (controller) controller.playback.setDefaultSubtitleEnabled(value) }
                 }
             }
         }
@@ -301,86 +133,21 @@ Rectangle {
 
                 function round1(v) { return Math.round(v * 10) / 10 }
 
-                Rectangle {
+                Components.StepperRow {
                     width: parent.width
-                    height: 30
-                    radius: Theme.radiusMedium
-                    color: Theme.bgSecondary
-                    border.color: Theme.withAlpha(Theme.primary, 0.12)
-                    border.width: 1
-
-                    Row {
-                        anchors.fill: parent
-                        anchors.margins: 6
-                        spacing: 8
-
-                        Text { text: "字体大小"; color: Theme.textPrimary; font.family: Theme.fontFamily; font.pixelSize: 11; width: 64 }
-
-                        Rectangle {
-                            width: 24; height: 24; radius: 6
-                            color: fontMinusArea.pressed ? Theme.withAlpha(Theme.primary, 0.2) : Theme.bgTertiary
-                            Text { anchors.centerIn: parent; text: "-"; color: Theme.textPrimary; font.pixelSize: 14 }
-                            MouseArea {
-                                id: fontMinusArea
-                                anchors.fill: parent
-                                onClicked: { if (controller) controller.playback.setSubtitleFontSize(controller.subtitleFontSize - 1) }
-                            }
-                        }
-
-                        Text { text: controller ? controller.subtitleFontSize : 0; color: Theme.textPrimary; font.family: Theme.fontFamily; font.pixelSize: 11; width: 30; horizontalAlignment: Text.AlignHCenter }
-
-                        Rectangle {
-                            width: 24; height: 24; radius: 6
-                            color: fontPlusArea.pressed ? Theme.withAlpha(Theme.primary, 0.2) : Theme.bgTertiary
-                            Text { anchors.centerIn: parent; text: "+"; color: Theme.textPrimary; font.pixelSize: 14 }
-                            MouseArea {
-                                id: fontPlusArea
-                                anchors.fill: parent
-                                onClicked: { if (controller) controller.playback.setSubtitleFontSize(controller.subtitleFontSize + 1) }
-                            }
-                        }
-                    }
+                    label: "字体大小"
+                    valueText: controller ? String(controller.subtitleFontSize) : "0"
+                    onDecreased: { if (controller) controller.playback.setSubtitleFontSize(controller.subtitleFontSize - 1) }
+                    onIncreased: { if (controller) controller.playback.setSubtitleFontSize(controller.subtitleFontSize + 1) }
                 }
 
-                Rectangle {
+                Components.StepperRow {
                     width: parent.width
-                    height: 30
-                    radius: Theme.radiusMedium
-                    color: Theme.bgSecondary
-                    border.color: Theme.withAlpha(Theme.primary, 0.12)
-                    border.width: 1
-
-                    Row {
-                        anchors.fill: parent
-                        anchors.margins: 6
-                        spacing: 8
-
-                        Text { text: "字重"; color: Theme.textPrimary; font.family: Theme.fontFamily; font.pixelSize: 11; width: 64 }
-
-                        Rectangle {
-                            width: 24; height: 24; radius: 6
-                            color: boldMinusArea.pressed ? Theme.withAlpha(Theme.primary, 0.2) : Theme.bgTertiary
-                            Text { anchors.centerIn: parent; text: "-"; color: Theme.textPrimary; font.pixelSize: 14 }
-                            MouseArea {
-                                id: boldMinusArea
-                                anchors.fill: parent
-                                onClicked: { if (controller) controller.playback.setSubtitleWeight(controller.subtitleWeight - 100) }
-                            }
-                        }
-
-                        Text { text: controller ? String(controller.subtitleWeight) : "700"; color: Theme.textPrimary; font.family: Theme.fontFamily; font.pixelSize: 11; width: 40; horizontalAlignment: Text.AlignHCenter }
-
-                        Rectangle {
-                            width: 24; height: 24; radius: 6
-                            color: boldPlusArea.pressed ? Theme.withAlpha(Theme.primary, 0.2) : Theme.bgTertiary
-                            Text { anchors.centerIn: parent; text: "+"; color: Theme.textPrimary; font.pixelSize: 14 }
-                            MouseArea {
-                                id: boldPlusArea
-                                anchors.fill: parent
-                                onClicked: { if (controller) controller.playback.setSubtitleWeight(controller.subtitleWeight + 100) }
-                            }
-                        }
-                    }
+                    label: "字重"
+                    valueWidth: 40
+                    valueText: controller ? String(controller.subtitleWeight) : "700"
+                    onDecreased: { if (controller) controller.playback.setSubtitleWeight(controller.subtitleWeight - 100) }
+                    onIncreased: { if (controller) controller.playback.setSubtitleWeight(controller.subtitleWeight + 100) }
                 }
 
                 Rectangle {
@@ -451,250 +218,52 @@ Rectangle {
                     }
                 }
 
-                Rectangle {
+                Components.ToggleRow {
                     width: parent.width
-                    height: 30
-                    radius: Theme.radiusMedium
-                    color: Theme.bgSecondary
-                    border.color: Theme.withAlpha(Theme.primary, 0.12)
-                    border.width: 1
-
-                    Row {
-                        anchors.fill: parent
-                        anchors.margins: 6
-                        spacing: 8
-
-                        Text { text: "描边"; color: Theme.textPrimary; font.family: Theme.fontFamily; font.pixelSize: 11; width: 64 }
-
-                        Rectangle {
-                            width: 44; height: 24; radius: 6
-                            color: controller && controller.subtitleOutlineEnabled ? Theme.withAlpha(Theme.primary, 0.25) : Theme.bgTertiary
-                            border.width: 1
-                            border.color: controller && controller.subtitleOutlineEnabled ? Theme.primary : Theme.withAlpha(Theme.primary, 0.16)
-                            Text { anchors.centerIn: parent; text: "开"; color: Theme.textPrimary; font.family: Theme.fontFamily; font.pixelSize: 10 }
-                            MouseArea {
-                                anchors.fill: parent
-                                onClicked: { if (controller) controller.playback.setSubtitleOutlineEnabled(true) }
-                            }
-                        }
-
-                        Rectangle {
-                            width: 44; height: 24; radius: 6
-                            color: controller && !controller.subtitleOutlineEnabled ? Theme.withAlpha(Theme.primary, 0.25) : Theme.bgTertiary
-                            border.width: 1
-                            border.color: controller && !controller.subtitleOutlineEnabled ? Theme.primary : Theme.withAlpha(Theme.primary, 0.16)
-                            Text { anchors.centerIn: parent; text: "关"; color: Theme.textPrimary; font.family: Theme.fontFamily; font.pixelSize: 10 }
-                            MouseArea {
-                                anchors.fill: parent
-                                onClicked: { if (controller) controller.playback.setSubtitleOutlineEnabled(false) }
-                            }
-                        }
-                    }
+                    label: "描边"
+                    checked: controller ? controller.subtitleOutlineEnabled : undefined
+                    onToggled: { if (controller) controller.playback.setSubtitleOutlineEnabled(value) }
                 }
 
-                Rectangle {
+                Components.ToggleRow {
                     width: parent.width
-                    height: 30
-                    radius: Theme.radiusMedium
-                    color: Theme.bgSecondary
-                    border.color: Theme.withAlpha(Theme.primary, 0.12)
-                    border.width: 1
-
-                    Row {
-                        anchors.fill: parent
-                        anchors.margins: 6
-                        spacing: 8
-
-                        Text { text: "灰底背景"; color: Theme.textPrimary; font.family: Theme.fontFamily; font.pixelSize: 11; width: 64 }
-
-                        Rectangle {
-                            width: 44; height: 24; radius: 6
-                            color: controller && controller.subtitleBackgroundEnabled ? Theme.withAlpha(Theme.primary, 0.25) : Theme.bgTertiary
-                            border.width: 1
-                            border.color: controller && controller.subtitleBackgroundEnabled ? Theme.primary : Theme.withAlpha(Theme.primary, 0.16)
-                            Text { anchors.centerIn: parent; text: "开"; color: Theme.textPrimary; font.family: Theme.fontFamily; font.pixelSize: 10 }
-                            MouseArea {
-                                anchors.fill: parent
-                                onClicked: { if (controller) controller.playback.setSubtitleBackgroundEnabled(true) }
-                            }
-                        }
-
-                        Rectangle {
-                            width: 44; height: 24; radius: 6
-                            color: controller && !controller.subtitleBackgroundEnabled ? Theme.withAlpha(Theme.primary, 0.25) : Theme.bgTertiary
-                            border.width: 1
-                            border.color: controller && !controller.subtitleBackgroundEnabled ? Theme.primary : Theme.withAlpha(Theme.primary, 0.16)
-                            Text { anchors.centerIn: parent; text: "关"; color: Theme.textPrimary; font.family: Theme.fontFamily; font.pixelSize: 10 }
-                            MouseArea {
-                                anchors.fill: parent
-                                onClicked: { if (controller) controller.playback.setSubtitleBackgroundEnabled(false) }
-                            }
-                        }
-                    }
+                    label: "灰底背景"
+                    checked: controller ? controller.subtitleBackgroundEnabled : undefined
+                    onToggled: { if (controller) controller.playback.setSubtitleBackgroundEnabled(value) }
                 }
 
-                Rectangle {
+                Components.StepperRow {
                     width: parent.width
-                    height: 30
-                    radius: Theme.radiusMedium
-                    color: Theme.bgSecondary
-                    border.color: Theme.withAlpha(Theme.primary, 0.12)
-                    border.width: 1
-
-                    Row {
-                        anchors.fill: parent
-                        anchors.margins: 6
-                        spacing: 8
-
-                        Text { text: "背景不透明"; color: Theme.textPrimary; font.family: Theme.fontFamily; font.pixelSize: 11; width: 64 }
-
-                        Rectangle {
-                            width: 24; height: 24; radius: 6
-                            color: bgOpacityMinusArea.pressed ? Theme.withAlpha(Theme.primary, 0.2) : Theme.bgTertiary
-                            Text { anchors.centerIn: parent; text: "-"; color: Theme.textPrimary; font.pixelSize: 14 }
-                            MouseArea {
-                                id: bgOpacityMinusArea
-                                anchors.fill: parent
-                                onClicked: { if (controller) controller.playback.setSubtitleBackgroundOpacity((Math.round(controller.subtitleBackgroundOpacity * 10) - 1) / 10) }
-                            }
-                        }
-
-                        Text { text: controller ? Math.round(controller.subtitleBackgroundOpacity * 100) + "%" : "50%"; color: Theme.textPrimary; font.family: Theme.fontFamily; font.pixelSize: 11; width: 40; horizontalAlignment: Text.AlignHCenter }
-
-                        Rectangle {
-                            width: 24; height: 24; radius: 6
-                            color: bgOpacityPlusArea.pressed ? Theme.withAlpha(Theme.primary, 0.2) : Theme.bgTertiary
-                            Text { anchors.centerIn: parent; text: "+"; color: Theme.textPrimary; font.pixelSize: 14 }
-                            MouseArea {
-                                id: bgOpacityPlusArea
-                                anchors.fill: parent
-                                onClicked: { if (controller) controller.playback.setSubtitleBackgroundOpacity((Math.round(controller.subtitleBackgroundOpacity * 10) + 1) / 10) }
-                            }
-                        }
-                    }
+                    label: "背景不透明"
+                    valueWidth: 40
+                    valueText: controller ? Math.round(controller.subtitleBackgroundOpacity * 100) + "%" : "50%"
+                    onDecreased: { if (controller) controller.playback.setSubtitleBackgroundOpacity((Math.round(controller.subtitleBackgroundOpacity * 10) - 1) / 10) }
+                    onIncreased: { if (controller) controller.playback.setSubtitleBackgroundOpacity((Math.round(controller.subtitleBackgroundOpacity * 10) + 1) / 10) }
                 }
 
-                Rectangle {
+                Components.StepperRow {
                     width: parent.width
-                    height: 30
-                    radius: Theme.radiusMedium
-                    color: Theme.bgSecondary
-                    border.color: Theme.withAlpha(Theme.primary, 0.12)
-                    border.width: 1
-
-                    Row {
-                        anchors.fill: parent
-                        anchors.margins: 6
-                        spacing: 8
-
-                        Text { text: "描边粗细"; color: Theme.textPrimary; font.family: Theme.fontFamily; font.pixelSize: 11; width: 64 }
-
-                        Rectangle {
-                            width: 24; height: 24; radius: 6
-                            color: outlineMinusArea.pressed ? Theme.withAlpha(Theme.primary, 0.2) : Theme.bgTertiary
-                            Text { anchors.centerIn: parent; text: "-"; color: Theme.textPrimary; font.pixelSize: 14 }
-                            MouseArea {
-                                id: outlineMinusArea
-                                anchors.fill: parent
-                                onClicked: { if (controller) controller.playback.setSubtitleOutlineWidth(controller.subtitleOutlineWidth - 1) }
-                            }
-                        }
-
-                        Text { text: controller ? controller.subtitleOutlineWidth : 1; color: Theme.textPrimary; font.family: Theme.fontFamily; font.pixelSize: 11; width: 30; horizontalAlignment: Text.AlignHCenter }
-
-                        Rectangle {
-                            width: 24; height: 24; radius: 6
-                            color: outlinePlusArea.pressed ? Theme.withAlpha(Theme.primary, 0.2) : Theme.bgTertiary
-                            Text { anchors.centerIn: parent; text: "+"; color: Theme.textPrimary; font.pixelSize: 14 }
-                            MouseArea {
-                                id: outlinePlusArea
-                                anchors.fill: parent
-                                onClicked: { if (controller) controller.playback.setSubtitleOutlineWidth(controller.subtitleOutlineWidth + 1) }
-                            }
-                        }
-                    }
+                    label: "描边粗细"
+                    valueText: controller ? String(controller.subtitleOutlineWidth) : "1"
+                    onDecreased: { if (controller) controller.playback.setSubtitleOutlineWidth(controller.subtitleOutlineWidth - 1) }
+                    onIncreased: { if (controller) controller.playback.setSubtitleOutlineWidth(controller.subtitleOutlineWidth + 1) }
                 }
 
-                Rectangle {
+                Components.StepperRow {
                     width: parent.width
-                    height: 30
-                    radius: Theme.radiusMedium
-                    color: Theme.bgSecondary
-                    border.color: Theme.withAlpha(Theme.primary, 0.12)
-                    border.width: 1
-
-                    Row {
-                        anchors.fill: parent
-                        anchors.margins: 6
-                        spacing: 8
-
-                        Text { text: "底边距离"; color: Theme.textPrimary; font.family: Theme.fontFamily; font.pixelSize: 11; width: 64 }
-
-                        Rectangle {
-                            width: 24; height: 24; radius: 6
-                            color: marginMinusArea.pressed ? Theme.withAlpha(Theme.primary, 0.2) : Theme.bgTertiary
-                            Text { anchors.centerIn: parent; text: "-"; color: Theme.textPrimary; font.pixelSize: 14 }
-                            MouseArea {
-                                id: marginMinusArea
-                                anchors.fill: parent
-                                onClicked: { if (controller) controller.playback.setSubtitleMarginV(controller.subtitleMarginV - 1) }
-                            }
-                        }
-
-                        Text { text: controller ? controller.subtitleMarginV : 0; color: Theme.textPrimary; font.family: Theme.fontFamily; font.pixelSize: 11; width: 30; horizontalAlignment: Text.AlignHCenter }
-
-                        Rectangle {
-                            width: 24; height: 24; radius: 6
-                            color: marginPlusArea.pressed ? Theme.withAlpha(Theme.primary, 0.2) : Theme.bgTertiary
-                            Text { anchors.centerIn: parent; text: "+"; color: Theme.textPrimary; font.pixelSize: 14 }
-                            MouseArea {
-                                id: marginPlusArea
-                                anchors.fill: parent
-                                onClicked: { if (controller) controller.playback.setSubtitleMarginV(controller.subtitleMarginV + 1) }
-                            }
-                        }
-                    }
+                    label: "底边距离"
+                    valueText: controller ? String(controller.subtitleMarginV) : "0"
+                    onDecreased: { if (controller) controller.playback.setSubtitleMarginV(controller.subtitleMarginV - 1) }
+                    onIncreased: { if (controller) controller.playback.setSubtitleMarginV(controller.subtitleMarginV + 1) }
                 }
 
-                Rectangle {
+                Components.StepperRow {
                     width: parent.width
-                    height: 30
-                    radius: Theme.radiusMedium
-                    color: Theme.bgSecondary
-                    border.color: Theme.withAlpha(Theme.primary, 0.12)
-                    border.width: 1
-
-                    Row {
-                        anchors.fill: parent
-                        anchors.margins: 6
-                        spacing: 8
-
-                        Text { text: "字间距"; color: Theme.textPrimary; font.family: Theme.fontFamily; font.pixelSize: 11; width: 64 }
-
-                        Rectangle {
-                            width: 24; height: 24; radius: 6
-                            color: spacingMinusArea.pressed ? Theme.withAlpha(Theme.primary, 0.2) : Theme.bgTertiary
-                            Text { anchors.centerIn: parent; text: "-"; color: Theme.textPrimary; font.pixelSize: 14 }
-                            MouseArea {
-                                id: spacingMinusArea
-                                anchors.fill: parent
-                                onClicked: { if (controller) controller.playback.setSubtitleSpacing(subtitleSettingsColumn.round1(controller.subtitleSpacing - 0.1)) }
-                            }
-                        }
-
-                        Text { text: controller ? subtitleSettingsColumn.round1(controller.subtitleSpacing).toFixed(1) : "0.0"; color: Theme.textPrimary; font.family: Theme.fontFamily; font.pixelSize: 11; width: 40; horizontalAlignment: Text.AlignHCenter }
-
-                        Rectangle {
-                            width: 24; height: 24; radius: 6
-                            color: spacingPlusArea.pressed ? Theme.withAlpha(Theme.primary, 0.2) : Theme.bgTertiary
-                            Text { anchors.centerIn: parent; text: "+"; color: Theme.textPrimary; font.pixelSize: 14 }
-                            MouseArea {
-                                id: spacingPlusArea
-                                anchors.fill: parent
-                                onClicked: { if (controller) controller.playback.setSubtitleSpacing(subtitleSettingsColumn.round1(controller.subtitleSpacing + 0.1)) }
-                            }
-                        }
-                    }
+                    label: "字间距"
+                    valueWidth: 40
+                    valueText: controller ? subtitleSettingsColumn.round1(controller.subtitleSpacing).toFixed(1) : "0.0"
+                    onDecreased: { if (controller) controller.playback.setSubtitleSpacing(subtitleSettingsColumn.round1(controller.subtitleSpacing - 0.1)) }
+                    onIncreased: { if (controller) controller.playback.setSubtitleSpacing(subtitleSettingsColumn.round1(controller.subtitleSpacing + 0.1)) }
                 }
             }
         }

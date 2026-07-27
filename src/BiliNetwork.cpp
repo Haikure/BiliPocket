@@ -7,7 +7,12 @@
 #include <QMetaObject>
 #include <QNetworkRequest>
 #include <QRunnable>
+#include <QThread>
+#include <memory>
 #include <utility>
+
+// 注意：BiliNetwork 单例必须在 GUI/qApp 线程首次创建。
+// init_plugin 可能跑在无事件循环的加载线程——那里绝不能 instance()。
 
 namespace {
 
@@ -109,7 +114,15 @@ QMutex BiliNetwork::s_instanceMutex;
 BiliNetwork *BiliNetwork::instance() {
   QMutexLocker locker(&s_instanceMutex);
   if (!s_instance) {
-    s_instance = new BiliNetwork(qApp); // parent = QApplication，自动清理
+    // parent = qApp，自动清理。不要在非 GUI 线程调用本函数来"顺便创建"：
+    // QObject 有 parent 时无法 moveToThread，QNAM 会钉死在错误线程。
+    if (qApp && QThread::currentThread() != qApp->thread()) {
+      qWarning() << "[BiliNet] instance() first created off GUI thread"
+                 << QThread::currentThread()
+                 << "— QNAM events may never dispatch. "
+                    "Create it from attach_engine / QML thread instead.";
+    }
+    s_instance = new BiliNetwork(qApp);
   }
   return s_instance;
 }
@@ -172,8 +185,13 @@ bool BiliNetwork::checkRateLimit() {
 }
 
 void BiliNetwork::trackReply(QNetworkReply *reply) {
-  QMutexLocker locker(&m_replyMutex);
-  m_activeReplies.insert(reply);
+  {
+    QMutexLocker locker(&m_replyMutex);
+    m_activeReplies.insert(reply);
+  }
+  // reply 销毁时自动摘除，避免遗漏 untrack 留下悬垂指针
+  connect(reply, &QObject::destroyed, this,
+          [this, reply]() { untrackReply(reply); });
 }
 
 void BiliNetwork::untrackReply(QNetworkReply *reply) {
@@ -181,7 +199,53 @@ void BiliNetwork::untrackReply(QNetworkReply *reply) {
   m_activeReplies.remove(reply);
 }
 
+void BiliNetwork::setApiServerReady(bool ready) {
+  if (m_apiServerReady == ready) {
+    return;
+  }
+  m_apiServerReady = ready;
+  if (ready) {
+    flushPendingRequests();
+    return;
+  }
+
+  // 关闸兜底：调用方普遍是"先关闸，再在异步回调里开闸"，只要有一条路径丢了
+  // 回调（bring-up 重入、manager 被销毁等），闸门就再也打不开，且插件重启也
+  // 救不回来——BiliNetwork 是跨插件生命周期存活的单例。这里兜底强制放行。
+  const int generation = ++m_readyGateGeneration;
+  QTimer::singleShot(READY_GATE_TIMEOUT_MS, this, [this, generation]() {
+    if (m_apiServerReady || m_readyGateGeneration != generation) {
+      return;
+    }
+    qWarning() << "[BiliNet] API ready gate timed out, force reopening";
+    m_apiServerReady = true;
+    flushPendingRequests();
+  });
+}
+
+void BiliNetwork::flushPendingRequests() {
+  if (!m_apiServerReady || m_pendingRequests.isEmpty()) {
+    return;
+  }
+  // 分批放行避免撞自身限流：3 条/批 × 400ms => 任意 1 秒窗口 ≤ 9 条 < 10 条/秒
+  const int batch = qMin(m_pendingRequests.size(), 3);
+  QVector<PendingRequest> current;
+  current.reserve(batch);
+  for (int i = 0; i < batch; ++i) {
+    current.append(m_pendingRequests.takeFirst());
+  }
+  for (PendingRequest &req : current) {
+    get(req.path, req.params, std::move(req.onSuccess), std::move(req.onError));
+  }
+  if (!m_pendingRequests.isEmpty()) {
+    QTimer::singleShot(400, this, [this]() { flushPendingRequests(); });
+  }
+}
+
 void BiliNetwork::cancelAllRequests() {
+  // 丢弃尚未发出的排队请求，不回调
+  m_pendingRequests.clear();
+
   QList<QNetworkReply *> replies;
   {
     QMutexLocker locker(&m_replyMutex);
@@ -198,6 +262,20 @@ void BiliNetwork::cancelAllRequests() {
 
 void BiliNetwork::get(const QString &path, const QMap<QString, QString> &params,
                       SuccessCallback onSuccess, ErrorCallback onError) {
+  // 服务未就绪时先排队，就绪后自动发出
+  if (!m_apiServerReady) {
+    if (m_pendingRequests.size() >= MAX_PENDING_REQUESTS) {
+      qWarning() << "[BiliNet] Pending queue full, rejecting:" << path;
+      if (onError) {
+        onError(-17, "服务启动中，请稍后重试");
+      }
+      return;
+    }
+    m_pendingRequests.append(
+        {path, params, std::move(onSuccess), std::move(onError)});
+    return;
+  }
+
   // 并发限制
   {
     QMutexLocker locker(&m_replyMutex);
@@ -372,13 +450,14 @@ void BiliNetwork::downloadVideo(const QString &url, const QString &targetPath,
     qWarning() << "[BiliNet] Failed to create temp file:" << targetPath;
     if (onError)
       onError(-15, "无法创建临时文件");
-    
+
     // 清理记录
+    untrackReply(reply);
     {
       QMutexLocker locker(&m_replyMutex);
       m_videoDownloadReply = nullptr;
     }
-    
+
     reply->abort();
     reply->deleteLater();
     delete file;
@@ -393,15 +472,24 @@ void BiliNetwork::downloadVideo(const QString &url, const QString &targetPath,
             }
           });
 
-  // 在数据可读时写入文件
-  connect(reply, &QNetworkReply::readyRead, [file, reply]() {
-    if (file && file->isOpen() && reply) {
-        if (reply->bytesAvailable() > 0) {
-            QByteArray data = reply->readAll();
-            if (!data.isEmpty()) {
-                file->write(data);
-            }
-        }
+  // 在数据可读时写入文件；写失败立即中止下载
+  auto writeFailed = std::make_shared<bool>(false);
+  connect(reply, &QNetworkReply::readyRead, [file, reply, writeFailed]() {
+    if (*writeFailed || !file || !file->isOpen() || !reply) {
+        return;
+    }
+    if (reply->bytesAvailable() <= 0) {
+        return;
+    }
+    const QByteArray data = reply->readAll();
+    if (data.isEmpty()) {
+        return;
+    }
+    const qint64 written = file->write(data);
+    if (written != data.size() || file->error() != QFileDevice::NoError) {
+        *writeFailed = true;
+        qWarning() << "[BiliNet] File write failed:" << file->errorString();
+        reply->abort(); // finished 中统一清理并回调 onError
     }
   });
 
@@ -418,7 +506,8 @@ void BiliNetwork::downloadVideo(const QString &url, const QString &targetPath,
   timer->start(300000);
 
   connect(reply, &QNetworkReply::finished, this,
-          [this, reply, file, targetPath, onSuccess, onError, timer]() {
+          [this, reply, file, targetPath, onSuccess, onError, timer,
+           writeFailed]() {
             timer->stop();
             timer->deleteLater();
             untrackReply(reply);
@@ -433,26 +522,44 @@ void BiliNetwork::downloadVideo(const QString &url, const QString &targetPath,
 
             // 写入剩余数据
             if (file && file->isOpen()) {
-                if (reply->bytesAvailable() > 0) {
-                    QByteArray data = reply->readAll();
+                if (!*writeFailed && reply->bytesAvailable() > 0) {
+                    const QByteArray data = reply->readAll();
                     if (!data.isEmpty()) {
-                        file->write(data);
+                        const qint64 written = file->write(data);
+                        if (written != data.size() ||
+                            file->error() != QFileDevice::NoError) {
+                            *writeFailed = true;
+                            qWarning() << "[BiliNet] File write failed:"
+                                       << file->errorString();
+                        }
                     }
+                }
+                if (!*writeFailed && !file->flush()) {
+                    *writeFailed = true;
+                    qWarning() << "[BiliNet] File flush failed:"
+                               << file->errorString();
                 }
                 file->close();
             }
 
-            if (reply->error() == QNetworkReply::NoError) {
+            if (reply->error() == QNetworkReply::NoError && !*writeFailed) {
               if (onSuccess) {
                 onSuccess(targetPath);
               }
             } else {
-              qWarning() << "[BiliNet] Download failed:"
-                         << reply->errorString();
               // 删除失败的文件
               file->remove();
-              if (onError) {
-                onError(reply->error(), reply->errorString());
+              if (*writeFailed) {
+                qWarning() << "[BiliNet] Download aborted by write failure";
+                if (onError) {
+                  onError(-16, "写入文件失败（磁盘空间可能不足）");
+                }
+              } else {
+                qWarning() << "[BiliNet] Download failed:"
+                           << reply->errorString();
+                if (onError) {
+                  onError(reply->error(), reply->errorString());
+                }
               }
             }
             reply->deleteLater();

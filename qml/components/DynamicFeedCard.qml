@@ -1,6 +1,6 @@
 import QtQuick 2.12
-import QtGraphicalEffects 1.12
 import ".."
+import "../js/ImageUrl.js" as ImageUrl
 
 Item {
     id: card
@@ -41,24 +41,13 @@ Item {
 
     signal clicked(string bvid)
 
+    // 保留同名包装，兼容既有属性绑定与外部调用
     function cdnSizedUrl(url, suffix) {
-        if (!url) return ""
-        var s = String(url)
-        if (s.indexOf("data:image/") === 0 || s.indexOf("image://") === 0) return s
-        var queryIndex = s.indexOf("?")
-        var base = queryIndex >= 0 ? s.slice(0, queryIndex) : s
-        var query = queryIndex >= 0 ? s.slice(queryIndex) : ""
-        var slash = base.lastIndexOf("/")
-        var at = base.indexOf("@", slash + 1)
-        if (at >= 0) base = base.slice(0, at)
-        return base + suffix + query
+        return ImageUrl.cdnSizedUrl(url, suffix)
     }
 
     function cdnImageSource(url, suffix) {
-        var s = cdnSizedUrl(url, suffix)
-        if (!s) return ""
-        if (s.indexOf("data:image/") === 0 || s.indexOf("image://") === 0) return s
-        return "image://bili/" + encodeURIComponent(s)
+        return ImageUrl.cdnImageSource(url, suffix)
     }
 
     function pictureAt(i) {
@@ -97,21 +86,17 @@ Item {
                     Image {
                         id: avatarImage
                         anchors.fill: parent
-                        source: card.imageActive ? card.avatarSource : ""
+                        // 圆形裁剪由 image provider 的 round/ 前缀完成，无需 OpacityMask
+                        source: {
+                            if (!card.imageActive || !card.authorFace) return ""
+                            var s = String(card.authorFace)
+                            if (s.indexOf("image://") === 0 || s.indexOf("data:image/") === 0) return s
+                            return "image://bili/round/size/48x48/" + encodeURIComponent(s)
+                        }
+                        sourceSize: Qt.size(48, 48)
                         fillMode: Image.PreserveAspectCrop
                         asynchronous: true
                         smooth: true
-                        visible: false
-                    }
-
-                    OpacityMask {
-                        anchors.fill: avatarImage
-                        source: avatarImage
-                        maskSource: Rectangle {
-                            width: avatarImage.width
-                            height: avatarImage.height
-                            radius: Math.min(width, height) / 2
-                        }
                     }
                 }
 

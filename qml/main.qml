@@ -598,6 +598,11 @@ Rectangle {
                             root.navigateTo("detail", { bvid: bvid })
                         });
                     }
+                    onDynamicSelected: {
+                        Qt.callLater(function() {
+                            root.navigateTo("dynamicDetail", { item: dynamicData || ({}) })
+                        });
+                    }
                 }
             }
         }
