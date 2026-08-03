@@ -7,7 +7,7 @@
 | 项目 | 说明 |
 |------|------|
 | 插件 ID | `com.bilipocket.player` |
-| 当前版本 | `1.7.0` |
+| 当前版本 | `1.7.2` |
 | 作者 | BiliPocket |
 | 安装路径 | `/userdisk/PenMods/plugins/bili_plugin/` |
 
