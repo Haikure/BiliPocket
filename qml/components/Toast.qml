@@ -30,8 +30,10 @@ Rectangle {
         horizontalAlignment: Text.AlignHCenter
     }
 
-    function show(message, duration) {
-        if (!duration) duration = 2000;
+    // 消息队列（最多滞留 2 条）：正在显示时新消息入队，避免连续操作互相顶掉
+    property var queue: []
+
+    function display(message, duration) {
         // 先停掉上一条的淡出动画，否则其 onFinished 会立刻隐藏新 toast
         hideAnim.stop();
         toastText.text = message;
@@ -39,6 +41,17 @@ Rectangle {
         showAnim.restart();
         hideTimer.interval = duration;
         hideTimer.restart();
+    }
+
+    function show(message, duration) {
+        if (!duration) duration = 2000;
+        if (toast.visible) {
+            // 正在显示：入队等待；队列满则丢弃最旧的一条
+            queue.push({message: message, duration: duration});
+            if (queue.length > 2) queue.shift();
+            return;
+        }
+        display(message, duration);
     }
 
     ParallelAnimation {
@@ -72,6 +85,13 @@ Rectangle {
             from: 1.0; to: 0.85; duration: Theme.animSlow
             easing.type: Easing.InCubic
         }
-        onFinished: toast.visible = false
+        onFinished: {
+            toast.visible = false
+            // 队列非空则继续显示下一条
+            if (queue.length > 0) {
+                var next = queue.shift()
+                display(next.message, next.duration)
+            }
+        }
     }
 }

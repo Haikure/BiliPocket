@@ -52,9 +52,7 @@ Rectangle {
 
     // 首页列表滚动位置缓存（仅从详情页返回时恢复）
     property real homePopularX: 0
-    property real homeRankingX: 0
     property bool restoreHomePopularOnShow: false
-    property bool restoreHomeRankingOnShow: false
 
     // SearchPage 搜索结果横向滚动位置（用于跨页面/跨销毁恢复）
     property real searchSavedResultX: 0
@@ -62,7 +60,7 @@ Rectangle {
     // 详情页分P列表滚动位置缓存：key=bvid, value=contentX
     property var detailPartListXCache: ({})
 
-    // 首页 Tab 记录（0=推荐,1=排行,3=我的）
+    // 首页 Tab 记录（0=推荐）
     property int homeTabIndex: 0
 
     function stackContains(page) {
@@ -238,8 +236,6 @@ Rectangle {
                 if (prev === "home") {
                     if (root.homeTabIndex === 0) {
                         restoreHomePopularOnShow = true;
-                    } else if (root.homeTabIndex === 1) {
-                        restoreHomeRankingOnShow = true;
                     }
                 } else if (prev === "ranking") {
                     restoreRankingPageOnShow = true;
@@ -340,7 +336,6 @@ Rectangle {
                         if (!bvid || bvid.length < 2) return;
                         if (homeLoader.item) {
                             root.homePopularX = homeLoader.item.popularContentX();
-                            root.homeRankingX = homeLoader.item.rankingContentX();
                             root.homeTabIndex = homeLoader.item.tabIndex;
                         }
                         Qt.callLater(function() {

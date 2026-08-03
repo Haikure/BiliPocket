@@ -465,9 +465,7 @@ QObject *BiliController::viewer() const { return m_viewerModule.get(); }
 void BiliController::clearError() { setGlobalError(""); }
 
 void BiliController::cancelAll() {
-  if (m_network) {
-    m_network->cancelAllRequests();
-  }
+  // 先落定状态再 abort：abort() 会同步触发 onError，避免取消被误报为失败
 
   // 立即重置前端可见加载状态，避免取消后卡在 loading UI
   m_loadingCount = 0;
@@ -505,6 +503,10 @@ void BiliController::cancelAll() {
     m_downloadProgress = 0;
     m_downloadStatus.clear();
     emit downloadStateChanged();
+  }
+
+  if (m_network) {
+    m_network->cancelAllRequests();
   }
 
   emit toastMessage("已取消当前请求");

@@ -25,11 +25,6 @@ Rectangle {
     readonly property int barHeight: 36
     readonly property color accentColor: "#00A1D6"
 
-    function launchExternalPlayer(path) {
-        if (!path || path.length === 0) return;
-        if (controller) controller.playback.launchExternalPlayer(path);
-    }
-
     Connections {
         target: controller
         function onPlaybackReady(url) {
@@ -58,40 +53,15 @@ Rectangle {
             visible: controller && controller.videoPic && controller.videoPic.length > 0
         }
 
-        Connections {
-            target: controller
-
-            function onDownloadStateChanged() {
-                // 下载完成且有临时文件路径时，启动外部播放器
-                if (launchRequested && controller && !controller.isDownloading) {
-                    if (controller.dashVideoUrl && controller.dashVideoUrl.length > 0 &&
-                        controller.dashAudioUrl && controller.dashAudioUrl.length > 0) {
-                        controller.playback.launchExternalPlayerCurrentSelection();
-                    }
-                }
-            }
-        }
-
         // 无视频时的占位提示
         Text {
             id: placeholderText
             anchors.centerIn: parent
             visible: {
                 if (!controller) return true;
-                if (controller.isDownloading) return true;
-                if (controller.tempVideoPath && controller.tempVideoPath.length > 0) return true;
                 return controlsVisible;
             }
-            text: {
-                if (controller) {
-                    if (controller.isDownloading)
-                        return "正在下载视频...";
-                    if (controller.tempVideoPath && controller.tempVideoPath.length > 0)
-                        return "已启动外部播放器";
-                    return "点击播放按钮以开始";
-                }
-                return "正在初始化...";
-            }
+            text: controller ? "点击播放按钮以开始" : "正在初始化..."
             color: "#999999"
             font.family: Theme.fontFamily
             font.pixelSize: 13
@@ -109,6 +79,7 @@ Rectangle {
         z: 10
         onClicked: {
             controlsVisible = !controlsVisible;
+            playPauseIcon.refresh(); // 重新核对播放器状态，更新暂停/播放图标
             if (controlsVisible) hideControlsTimer.restart();
         }
     }
@@ -232,23 +203,40 @@ Rectangle {
                         anchors.centerIn: parent
                         width: iconSize
                         height: iconSize
+                        // externalPlayerRunning() 无 notify 信号，交互点手动 refresh()
                         property bool playing: false
+                        function refresh() {
+                            playing = controller && controller.playback.externalPlayerRunning()
+                        }
                         onPaint: {
                             var ctx = getContext("2d");
                             ctx.clearRect(0, 0, width, height);
                             ctx.fillStyle = "#FFFFFF";
-                            var triWidth = 14;
-                            var triHeight = 16;
-                            var offsetX = (width - triWidth) / 2 + 2;
-                            var offsetY = (height - triHeight) / 2;
-                            ctx.beginPath();
-                            ctx.moveTo(offsetX, offsetY);
-                            ctx.lineTo(offsetX, offsetY + triHeight);
-                            ctx.lineTo(offsetX + triWidth, offsetY + triHeight / 2);
-                            ctx.closePath();
-                            ctx.fill();
+                            if (playing) {
+                                // 暂停：两条竖条
+                                var barWidth = 4;
+                                var gap = 5;
+                                var totalW = barWidth * 2 + gap;
+                                var barX = (width - totalW) / 2;
+                                var barY = (height - 16) / 2;
+                                ctx.fillRect(barX, barY, barWidth, 16);
+                                ctx.fillRect(barX + barWidth + gap, barY, barWidth, 16);
+                            } else {
+                                // 播放：三角
+                                var triWidth = 14;
+                                var triHeight = 16;
+                                var offsetX = (width - triWidth) / 2 + 2;
+                                var offsetY = (height - triHeight) / 2;
+                                ctx.beginPath();
+                                ctx.moveTo(offsetX, offsetY);
+                                ctx.lineTo(offsetX, offsetY + triHeight);
+                                ctx.lineTo(offsetX + triWidth, offsetY + triHeight / 2);
+                                ctx.closePath();
+                                ctx.fill();
+                            }
                         }
-                        Component.onCompleted: requestPaint()
+                        onPlayingChanged: requestPaint()
+                        Component.onCompleted: refresh()
                     }
                 }
 
@@ -257,6 +245,8 @@ Rectangle {
                     anchors.fill: parent
                     onClicked: {
                         if (!controller) return;
+                        if (controller.isLoading) return; // fetch 在途，避免重复触发与重复 toast
+                        playPauseIcon.refresh();
                         if (controller.playback.externalPlayerRunning()) {
                             controller.toastMessage("播放器已在运行，请先关闭当前窗口");
                             return;
@@ -269,6 +259,7 @@ Rectangle {
                             controller.playback.fetchPlayUrl(playQuality);
                         }
                         hideControlsTimer.restart();
+                        playPauseIcon.refresh();
                     }
                 }
             }
@@ -288,67 +279,13 @@ Rectangle {
     }
 
     // ══════════════════════════════════════════
-    //  第4层：下载进度（z: 100，最顶层）
-    // ══════════════════════════════════════════
-    Rectangle {
-        id: downloadProgressOverlay
-        anchors.centerIn: parent
-        width: Math.min(parent.width * 0.8, 300)
-        height: 80
-        radius: 8
-        color: Qt.rgba(0, 0, 0, 0.85)
-        visible: controller && controller.isDownloading
-        z: 100
-
-        Column {
-            anchors.centerIn: parent
-            width: parent.width - 20
-            spacing: 8
-
-            Text {
-                text: controller ? controller.downloadStatus : "正在下载..."
-                color: "#FFFFFF"
-                font.family: Theme.fontFamily
-                font.pixelSize: 12
-                anchors.horizontalCenter: parent.horizontalCenter
-                wrapMode: Text.WordWrap
-                width: parent.width
-                horizontalAlignment: Text.AlignHCenter
-            }
-
-            Rectangle {
-                width: parent.width
-                height: 4
-                radius: 2
-                color: Qt.rgba(1, 1, 1, 0.3)
-                Rectangle {
-                    width: parent.width * (controller ? controller.downloadProgress : 0)
-                    height: parent.height
-                    radius: 2
-                    color: accentColor
-                }
-            }
-        }
-
-        // 点击任意位置取消下载
-        MouseArea {
-            anchors.fill: parent
-            onClicked: {
-                if (controller) {
-                    controller.playback.cancelDownload();
-                }
-            }
-        }
-    }
-
-    // ══════════════════════════════════════════
     //  Loading 指示器
     // ══════════════════════════════════════════
     Components.LoadingIndicator {
         anchors.centerIn: parent
         z: 50
-        running: controller && controller.isLoading && !controller.isDownloading
-        message: controller && controller.isDownloading ? "正在下载视频..." : "获取播放地址..."
+        running: controller && controller.isLoading
+        message: "获取播放地址..."
         onCancelRequested: {
             if (controller) controller.cancelAll();
         }
@@ -370,6 +307,6 @@ Rectangle {
     }
 
     Component.onDestruction: {
-        if (controller) controller.playback.cleanupTempVideo();
+        if (controller) controller.playback.cleanupTempSubtitle();
     }
 }

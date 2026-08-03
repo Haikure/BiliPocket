@@ -15,12 +15,10 @@ public:
   explicit BiliPlaybackModule(BiliController *controller);
   Q_INVOKABLE void fetchPlayUrl(int quality = 64);
   Q_INVOKABLE void fetchAcceptQualities(int quality = 64);
-  Q_INVOKABLE void downloadAndPlay(int quality = 64);
   Q_INVOKABLE void cancelDownload();
-  Q_INVOKABLE void cleanupTempVideo();
+  Q_INVOKABLE void cleanupTempSubtitle();
   Q_INVOKABLE bool externalPlayerRunning() const;
   Q_INVOKABLE void launchExternalPlayer(const QString &path);
-  Q_INVOKABLE void launchExternalPlayerWithAudio(const QString &videoPath, const QString &audioPath);
   Q_INVOKABLE void launchExternalPlayerWithAudioUrl(const QString &videoUrl, const QString &audioUrl);
   Q_INVOKABLE void launchExternalPlayerWithAudioUrlAndSubtitle(const QString &videoUrl, const QString &audioUrl, const QString &subtitlePath);
   Q_INVOKABLE void fetchSubtitleList(bool silent = false);

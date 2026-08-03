@@ -2335,6 +2335,11 @@ Rectangle {
         Behavior on opacity { NumberAnimation { duration: 200 } }
         opacity: visible ? 1 : 0
 
+        // 吞掉点击，避免穿透到下层页面；取消只通过下方按钮触发
+        MouseArea {
+            anchors.fill: parent
+        }
+
         Column {
             anchors.centerIn: parent
             width: parent.width - 80
@@ -2365,12 +2370,58 @@ Rectangle {
                     Behavior on width { NumberAnimation { duration: 150 } }
                 }
             }
-        }
 
-        MouseArea {
-            anchors.fill: parent
-            onClicked: {
-                if (controller) controller.playback.cancelDownload();
+            // 与进度条拉开一点间距
+            Item { width: 1; height: 4 }
+
+            // 取消下载按钮（与工具行按钮同款：主题色胶囊 + 按下变深 + 缩放反馈）
+            Rectangle {
+                id: cancelDownloadBtn
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: 100
+                height: 24
+                radius: 12
+                color: cancelDownloadArea.pressed ? primaryDark : primaryColor
+                scale: cancelDownloadArea.pressed ? 0.92 : 1.0
+                Behavior on scale { NumberAnimation { duration: 120; easing.type: Easing.OutCubic } }
+                Behavior on color { ColorAnimation { duration: 100 } }
+
+                Row {
+                    anchors.centerIn: parent
+                    spacing: 4
+
+                    Canvas {
+                        width: 11
+                        height: 11
+                        anchors.verticalCenter: parent.verticalCenter
+                        onPaint: {
+                            var ctx = getContext("2d");
+                            ctx.clearRect(0, 0, width, height);
+                            // 停止图标（方块）
+                            ctx.fillStyle = "white";
+                            ctx.beginPath();
+                            ctx.rect(1.5, 1.5, 8, 8);
+                            ctx.fill();
+                        }
+                    }
+
+                    Text {
+                        text: "取消下载"
+                        color: "white"
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 8
+                        font.bold: true
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                }
+
+                MouseArea {
+                    id: cancelDownloadArea
+                    anchors.fill: parent
+                    onClicked: {
+                        if (controller) controller.playback.cancelDownload();
+                    }
+                }
             }
         }
     }

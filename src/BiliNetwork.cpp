@@ -106,6 +106,10 @@ private:
   QPointer<BiliNetwork> m_net;
 };
 
+// 合并 DASH 流的接口路径（Go 侧 /video/merge）：
+// 合并请求属于下载任务的一部分，取消下载时要一并中止
+const char *const kMergeRequestPath = "/video/merge";
+
 } // namespace
 
 BiliNetwork *BiliNetwork::s_instance = nullptr;
@@ -141,15 +145,20 @@ BiliNetwork::~BiliNetwork() {
 }
 
 void BiliNetwork::cancelVideoDownload() {
-  QPointer<QNetworkReply> replyToAbort;
+  QList<QPointer<QNetworkReply>> repliesToAbort;
   {
     QMutexLocker locker(&m_replyMutex);
-    replyToAbort = m_videoDownloadReply;
+    repliesToAbort = m_downloadReplies.values();
+    if (m_mergeReply) {
+      repliesToAbort.append(m_mergeReply);
+    }
   }
 
-  if (replyToAbort) {
-    qDebug() << "[BiliNetwork] Aborting video download...";
-    replyToAbort->abort();
+  for (const QPointer<QNetworkReply> &reply : repliesToAbort) {
+    if (reply) {
+      qDebug() << "[BiliNetwork] Aborting download/merge request...";
+      reply->abort();
+    }
   }
 }
 
@@ -249,6 +258,8 @@ void BiliNetwork::cancelAllRequests() {
   QList<QNetworkReply *> replies;
   {
     QMutexLocker locker(&m_replyMutex);
+    // abort() 同步触发 finished，置位标志让 handleReply 静默本次取消
+    m_cancelingAll = true;
     replies = m_activeReplies.values();
   }
 
@@ -257,11 +268,17 @@ void BiliNetwork::cancelAllRequests() {
       reply->abort();
     }
   }
+  // 下一事件循环迭代复位：覆盖"内部已完成但 finished 尚在队列"的异步派发
+  QTimer::singleShot(0, this, [this]() {
+    QMutexLocker locker(&m_replyMutex);
+    m_cancelingAll = false;
+  });
   // 不在这里删除，让 finished 信号处理清理
 }
 
 void BiliNetwork::get(const QString &path, const QMap<QString, QString> &params,
-                      SuccessCallback onSuccess, ErrorCallback onError) {
+                      SuccessCallback onSuccess, ErrorCallback onError,
+                      int timeoutMs) {
   // 服务未就绪时先排队，就绪后自动发出
   if (!m_apiServerReady) {
     if (m_pendingRequests.size() >= MAX_PENDING_REQUESTS) {
@@ -315,6 +332,11 @@ void BiliNetwork::get(const QString &path, const QMap<QString, QString> &params,
   request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
   applyCommonHeaders(request);
 
+  // 全局 10s 空闲超时会截断合并等长时间无数据回流的请求，用请求级超时覆盖
+  if (timeoutMs > 0) {
+    request.setTransferTimeout(timeoutMs);
+  }
+
   QNetworkReply *reply = m_nam->get(request);
   if (!reply) {
     if (onError) {
@@ -324,6 +346,12 @@ void BiliNetwork::get(const QString &path, const QMap<QString, QString> &params,
   }
 
   trackReply(reply);
+
+  // 合并请求单独跟踪：取消下载任务时要一并中止
+  if (path == QLatin1String(kMergeRequestPath)) {
+    QMutexLocker locker(&m_replyMutex);
+    m_mergeReply = reply;
+  }
 
   // 超时处理 — 使用 QPointer 防止悬空指针
   QPointer<QNetworkReply> safeReply(reply);
@@ -336,15 +364,23 @@ void BiliNetwork::get(const QString &path, const QMap<QString, QString> &params,
       qWarning() << "[BiliNet] Request timeout!";
       // 不在这里调用 onError，让 finished 处理
     }
+    // 先断开 finished 侧对 timer 的引用，再排队删除，避免双重 deleteLater 竞态
+    timer->disconnect();
     timer->deleteLater();
   });
-  timer->start(m_requestTimeout);
+  timer->start(timeoutMs > 0 ? timeoutMs : m_requestTimeout);
 
   connect(reply, &QNetworkReply::finished, this,
           [this, reply, onSuccess, onError, timer]() {
             timer->stop();
             timer->deleteLater();
             untrackReply(reply);
+            {
+              QMutexLocker locker(&m_replyMutex);
+              if (m_mergeReply == reply) {
+                m_mergeReply = nullptr;
+              }
+            }
             handleReply(reply, onSuccess, onError);
           });
 }
@@ -387,6 +423,7 @@ void BiliNetwork::downloadImage(const QUrl &url, RawCallback onSuccess,
     if (safeReply && safeReply->isRunning()) {
       safeReply->abort();
     }
+    timer->disconnect();
     timer->deleteLater();
   });
   timer->start(10000);
@@ -394,6 +431,7 @@ void BiliNetwork::downloadImage(const QUrl &url, RawCallback onSuccess,
   connect(reply, &QNetworkReply::finished, this,
           [this, reply, onSuccess, onError, timer]() {
             timer->stop();
+            timer->disconnect();
             timer->deleteLater();
             untrackReply(reply);
 
@@ -418,7 +456,8 @@ void BiliNetwork::downloadImage(const QUrl &url, RawCallback onSuccess,
 void BiliNetwork::downloadVideo(const QString &url, const QString &targetPath,
                                 std::function<void(const QString &path)> onSuccess,
                                 std::function<void(int code, const QString &msg)> onError,
-                                std::function<void(qint64 received, qint64 total)> onProgress) {
+                                std::function<void(qint64 received, qint64 total)> onProgress,
+                                const QString &tag) {
   QUrl downloadUrl(url);
   if (!downloadUrl.isValid()) {
     if (onError)
@@ -428,6 +467,8 @@ void BiliNetwork::downloadVideo(const QString &url, const QString &targetPath,
 
   QNetworkRequest request(downloadUrl);
   applyCommonHeaders(request);
+  // 弱网卡顿时 10s 空闲超时会误杀下载，改为 300s（与下方总超时 QTimer 一致）
+  request.setTransferTimeout(300000);
 
   QNetworkReply *reply = m_nam->get(request);
   if (!reply) {
@@ -436,10 +477,10 @@ void BiliNetwork::downloadVideo(const QString &url, const QString &targetPath,
     return;
   }
 
-  // 记录下载任务
+  // 按用途分槽记录下载任务（视频/音频流与字幕互不覆盖）
   {
     QMutexLocker locker(&m_replyMutex);
-    m_videoDownloadReply = reply;
+    m_downloadReplies.insert(tag, reply);
   }
 
   trackReply(reply);
@@ -455,7 +496,9 @@ void BiliNetwork::downloadVideo(const QString &url, const QString &targetPath,
     untrackReply(reply);
     {
       QMutexLocker locker(&m_replyMutex);
-      m_videoDownloadReply = nullptr;
+      if (m_downloadReplies.value(tag) == reply) {
+        m_downloadReplies.remove(tag);
+      }
     }
 
     reply->abort();
@@ -500,6 +543,7 @@ void BiliNetwork::downloadVideo(const QString &url, const QString &targetPath,
     if (safeReply && safeReply->isRunning()) {
       safeReply->abort();
     }
+    timer->disconnect();
     timer->deleteLater();
   });
   // 视频下载超时时间设为 5 分钟
@@ -507,16 +551,17 @@ void BiliNetwork::downloadVideo(const QString &url, const QString &targetPath,
 
   connect(reply, &QNetworkReply::finished, this,
           [this, reply, file, targetPath, onSuccess, onError, timer,
-           writeFailed]() {
+           writeFailed, tag]() {
             timer->stop();
+            timer->disconnect();
             timer->deleteLater();
             untrackReply(reply);
 
             // 确保在 finished 信号处理结束时，清理对 reply 的跟踪
             {
                 QMutexLocker locker(&m_replyMutex);
-                if (m_videoDownloadReply == reply) {
-                    m_videoDownloadReply = nullptr;
+                if (m_downloadReplies.value(tag) == reply) {
+                    m_downloadReplies.remove(tag);
                 }
             }
 
@@ -611,6 +656,17 @@ void BiliNetwork::handleReply(QNetworkReply *reply, SuccessCallback onSuccess,
     }
 
     qWarning() << "[BiliNet] Error:" << errorCode << errorMsg;
+
+    // cancelAll 已重置状态，其引发的取消静默跳过 onError
+    if (reply->error() == QNetworkReply::OperationCanceledError) {
+      bool silent = false;
+      {
+        QMutexLocker locker(&m_replyMutex);
+        silent = m_cancelingAll;
+      }
+      if (silent)
+        return;
+    }
 
     if (onError) {
       onError(errorCode, errorMsg);

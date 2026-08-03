@@ -95,8 +95,6 @@ class BiliController : public QObject {
   Q_PROPERTY(bool isDownloading READ isDownloading NOTIFY downloadStateChanged)
   Q_PROPERTY(double downloadProgress READ downloadProgress NOTIFY downloadStateChanged)
   Q_PROPERTY(QString downloadStatus READ downloadStatus NOTIFY downloadStateChanged)
-  Q_PROPERTY(QString tempVideoPath READ tempVideoPath NOTIFY downloadStateChanged)
-  Q_PROPERTY(QString tempAudioPath READ tempAudioPath NOTIFY downloadStateChanged)
   Q_PROPERTY(QString dashVideoUrl READ dashVideoUrl NOTIFY playUrlChanged)
   Q_PROPERTY(QString dashAudioUrl READ dashAudioUrl NOTIFY playUrlChanged)
   Q_PROPERTY(QVariantList subtitleList READ subtitleList NOTIFY subtitleListChanged)
@@ -206,8 +204,6 @@ public:
   bool isDownloading() const { return m_isDownloading; }
   double downloadProgress() const { return m_downloadProgress; }
   QString downloadStatus() const { return m_downloadStatus; }
-  QString tempVideoPath() const { return m_tempVideoPath; }
-  QString tempAudioPath() const { return m_tempAudioPath; }
   QString dashVideoUrl() const { return m_dashVideoUrl; }
   QString dashAudioUrl() const { return m_dashAudioUrl; }
   QVariantList subtitleList() const;
@@ -435,8 +431,6 @@ private:
   bool m_isDownloading;
   double m_downloadProgress;
   QString m_downloadStatus;
-  QString m_tempVideoPath;
-  QString m_tempAudioPath;
   QString m_tempSubtitlePath;
   QString m_dashVideoUrl;
   QString m_dashAudioUrl;
@@ -569,11 +563,21 @@ private:
 
   void startDownloadTask(const QString &videoUrl, const QString &audioUrl,
                          const QString &videoPath, const QString &audioPath,
-                         int finalQuality, bool playAfter,
+                         int finalQuality,
                          const QString &successToastPrefix = QString(),
                          const QString &errorToastPrefix = QStringLiteral("下载失败："),
                          const QString &subtitleUrl = QString(),
-                         const QString &subtitlePath = QString());
+                         const QString &subtitlePath = QString(),
+                         const QString &finalOutputPath = QString());
+
+  // 下载完成收尾：可选保存字幕，然后置状态并 toast
+  void finishDownloadSuccess(const QString &path, const QString &successToastPrefix,
+                             const QString &subtitleUrl, const QString &subtitlePath);
+  // 合并两个 m4s 为最终 mp4；失败保留 m4s 以便重试
+  void mergeM4sPair(const QString &videoPath, const QString &audioPath,
+                    const QString &outputPath, const QString &successToastPrefix,
+                    const QString &errorToastPrefix, const QString &subtitleUrl,
+                    const QString &subtitlePath);
 
   // 标记对象是否正在销毁
   bool m_destroying;

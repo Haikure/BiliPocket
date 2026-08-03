@@ -30,7 +30,6 @@ Rectangle {
     property bool initialPopularRequested: false
     property bool popularModelAttached: false
     readonly property bool popularImagesActive: visible && tabIndex === 0
-    readonly property bool rankingImagesActive: visible && tabIndex === 1
     readonly property bool profileImagesActive: visible && tabIndex === 3
 
     function requestInitialPopular() {
@@ -170,70 +169,6 @@ Rectangle {
             }
         }
 
-        // ──── Tab 1: 排行 ────
-        Item {
-            anchors.fill: parent
-            visible: tabIndex === 1
-            opacity: visible ? 1 : 0
-            Behavior on opacity { NumberAnimation { duration: 120 } }
-
-            ListView {
-                id: rankingList
-                anchors.fill: parent
-                anchors.margins: 4
-                // 该 Tab 当前不可达（switchTab(1) 直接跳 RankingPage），门控 model 免建 delegate
-                model: controller && homePage.tabIndex === 1 ? controller.feed.rankingModel() : null
-                orientation: ListView.Horizontal
-                spacing: 6
-                clip: true
-                reuseItems: true
-
-                cacheBuffer: Theme.listCacheBuffer
-                displayMarginBeginning: Theme.listDisplayMargin
-                displayMarginEnd: Theme.listDisplayMargin
-
-                delegate: VideoCardCompact {
-                    height: rankingList.height
-                    videoTitle: model.title || ""
-                    coverUrl: model.pic || ""
-                    imageActive: homePage.rankingImagesActive
-                    preferOffscreenPlaceholder: controller && controller.videoCardOffscreenPlaceholderEnabled
-                    upName: model.ownerName || ""
-                    viewCount: model.views || ""
-                    durationText: model.durationText || ""
-                    bvid: model.bvid || ""
-                    partCount: model.partCount || 1
-                    rankIndex: index + 1
-                    showRank: true
-                    onClicked: homePage.videoSelected(bvid)
-                }
-
-                Row {
-                    visible: rankingList.count === 0 && isLoading
-                    anchors.left: parent.left
-                    anchors.leftMargin: 2
-                    anchors.verticalCenter: parent.verticalCenter
-                    spacing: 6
-                    Repeater {
-                        model: 3
-                        VideoCardCompact {
-                            height: rankingList.height
-                            placeholder: true
-                                }
-                    }
-                }
-
-                Text {
-                    visible: rankingList.count === 0 && !isLoading
-                    text: "排行榜加载中..."
-                    color: Theme.textTertiary
-                    font.family: Theme.fontFamily
-                    font.pixelSize: 12
-                    anchors.centerIn: parent
-                }
-            }
-        }
-
         // ──── Tab 3: 我的 ────
         Item {
             anchors.fill: parent
@@ -340,6 +275,16 @@ Rectangle {
                 }
             }
         }
+    }
+
+    // ── 更多菜单遮罩：菜单打开时拦截内容区点击，点菜单外任意处关闭 ──
+    // z 高于内容区(0)，低于 tabBar(10) 与 moreMenu(30)，因此 tab 栏仍可操作
+    MouseArea {
+        id: moreMenuDismissArea
+        anchors.fill: parent
+        z: 5
+        visible: moreMenuVisible
+        onClicked: moreMenuVisible = false
     }
 
     // ── 更多菜单：从底部“更多”按钮淡入，后续功能继续纵向追加 ──
@@ -494,7 +439,10 @@ Rectangle {
                     id: exitMouseArea
                     anchors.fill: parent
                     anchors.margins: -4
-                    onClicked: homePage.backButtonClicked()
+                    onClicked: {
+                        moreMenuVisible = false
+                        homePage.backButtonClicked()
+                    }
                 }
             }
 
@@ -639,21 +587,10 @@ Rectangle {
         return popularList ? popularList.contentX : 0
     }
 
-    function rankingContentX() {
-        return rankingList ? rankingList.contentX : 0
-    }
-
     function restorePopularContentX(x) {
         if (popularList) {
             popularList.positionViewAtIndex(0, ListView.Beginning)
             popularList.contentX = x
-        }
-    }
-
-    function restoreRankingContentX(x) {
-        if (rankingList) {
-            rankingList.positionViewAtIndex(0, ListView.Beginning)
-            rankingList.contentX = x
         }
     }
 
@@ -665,15 +602,6 @@ Rectangle {
                 Qt.callLater(function() {
                     restorePopularContentX(rootRef.homePopularX)
                     rootRef.restoreHomePopularOnShow = false
-                })
-            })
-        }
-        if (rootRef.restoreHomeRankingOnShow && tabIndex === 1) {
-            Qt.callLater(function() {
-                restoreRankingContentX(rootRef.homeRankingX)
-                Qt.callLater(function() {
-                    restoreRankingContentX(rootRef.homeRankingX)
-                    rootRef.restoreHomeRankingOnShow = false
                 })
             })
         }

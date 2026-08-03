@@ -270,126 +270,56 @@ void BiliPlaybackModule::fetchAcceptQualities(int quality) {
       });
 }
 
-// ====== 下载并播放视频 ======
-
-void BiliPlaybackModule::downloadAndPlay(int quality) {
-  if (m_controller->m_currentVideo.bvid.isEmpty() || m_controller->m_currentVideo.cid == 0) {
-    emit m_controller->toastMessage("视频信息不完整，无法下载");
-    return;
-  }
-
-  if (m_controller->m_isDownloading) {
-    emit m_controller->toastMessage("正在下载中，请稍候...");
-    return;
-  }
-
-  quality = qBound(16, quality, 127);
-  m_controller->setIsLoading(true);
-
-  // 先清理旧的临时文件
-  cleanupTempVideo();
-
-  // 生成临时文件路径
-  QString tempDir =
-      QStandardPaths::writableLocation(QStandardPaths::TempLocation);
-  QString baseName = QString("bili_%1_%2")
-                         .arg(m_controller->m_currentVideo.bvid)
-                         .arg(QDateTime::currentMSecsSinceEpoch());
-  m_controller->m_tempVideoPath = QDir(tempDir).filePath(baseName + ".m4s");
-  m_controller->m_tempAudioPath = QDir(tempDir).filePath(baseName + "_audio.m4s");
-
-  QMap<QString, QString> params;
-  params["aid"] = QString::number(m_controller->videoAid());
-  params["cid"] = QString::number(m_controller->m_currentVideo.cid);
-  params["qn"] = QString::number(quality);
-  params["bvid"] = m_controller->m_currentVideo.bvid;
-  params["fnval"] = "1"; // MP4 合并流
-
-  QPointer<BiliController> self(m_controller);
-
-  m_controller->m_network->get(
-      "/video/playurl", params,
-      [self, quality](const QJsonObject &data) {
-        if (!self)
-          return;
-
-        QString videoUrl;
-        QString audioUrl;
-        int requestedQuality = quality;
-        int finalQuality = requestedQuality;
-        int apiQuality = data.value("quality").toInt(0);
-        if (apiQuality > 0) {
-          finalQuality = apiQuality;
-        }
-
-        self->updateAcceptQualities(data);
-
-        auto dash = self->pickDashUrls(data, requestedQuality);
-        videoUrl = dash.videoUrl;
-        audioUrl = dash.audioUrl;
-        finalQuality = dash.finalQuality;
-
-        // 回退到 MP4（durl）
-        if (videoUrl.isEmpty()) {
-          videoUrl = self->pickMp4Url(data);
-        }
-
-        if (videoUrl.isEmpty()) {
-          emit self->toastMessage("未获取到播放地址");
-          self->setIsLoading(false);
-          return;
-        }
-
-        self->startDownloadTask(videoUrl, audioUrl, self->m_tempVideoPath,
-                                self->m_tempAudioPath, finalQuality, true);
-      },
-      [self](int code, const QString &msg) {
-        Q_UNUSED(code)
-        if (!self)
-          return;
-
-        self->setIsLoading(false);
-        emit self->toastMessage(QString("获取播放地址失败：%1").arg(msg));
-      });
-}
+// ====== 取消下载 ======
 
 void BiliPlaybackModule::cancelDownload() {
   if (!m_controller->m_isDownloading)
     return;
 
-  // 调用新的、专门的取消下载方法，避免死锁
-  m_controller->m_network->cancelVideoDownload();
-
-  // 这里可以立即更新UI状态，因为网络层的abort()会异步触发错误回调
-  // 错误回调会再次更新状态，但这里的即时更新能提供更好的用户反馈
+  // 先置位取消状态再 abort：abort() 同步触发 onError，否则取消会被误判为失败
   m_controller->m_isDownloading = false;
+  m_controller->m_downloadProgress = 0;
   m_controller->m_downloadStatus = "正在取消...";
   emit m_controller->downloadStateChanged();
+
+  m_controller->m_network->cancelVideoDownload();
+
   emit m_controller->toastMessage("正在取消下载...");
 }
 
-void BiliPlaybackModule::cleanupTempVideo() {
-  if (!m_controller->m_tempVideoPath.isEmpty()) {
-    QFile file(m_controller->m_tempVideoPath);
-    if (file.exists()) {
-      file.remove();
-    }
-    m_controller->m_tempVideoPath.clear();
+void BiliPlaybackModule::cleanupTempSubtitle() {
+  // 清掉请求 key，让页面销毁后迟到的 fetch 回调直接 return
+  m_controller->m_playUrlLoadingKey.clear();
+  m_controller->m_acceptQualitiesLoadingKey.clear();
+
+  if (m_controller->m_tempSubtitlePath.isEmpty()) {
+    m_controller->clearPlayResult();
+    return;
   }
-  if (!m_controller->m_tempAudioPath.isEmpty()) {
-    QFile file(m_controller->m_tempAudioPath);
-    if (file.exists()) {
-      file.remove();
-    }
-    m_controller->m_tempAudioPath.clear();
+
+  const QString subtitlePath = m_controller->m_tempSubtitlePath;
+
+  // mpv 以路径参数读字幕有打开时延，播放器仍在运行时不删，退出后再清
+  if (isExternalPlayerRunning() && m_controller->m_externalPlayerProcess) {
+    QPointer<BiliController> self(m_controller);
+    QPointer<QProcess> proc(m_controller->m_externalPlayerProcess);
+    QObject::connect(proc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+                     proc,
+                     [self, proc, subtitlePath](int, QProcess::ExitStatus) {
+                       if (!self)
+                         return;
+                       QFile::remove(subtitlePath);
+                       if (self->m_tempSubtitlePath == subtitlePath) {
+                         self->m_tempSubtitlePath.clear();
+                       }
+                     });
+    // 页面销毁时不立即删除；m_tempSubtitlePath 保留，待 mpv 退出后清理。
+    m_controller->clearPlayResult();
+    return;
   }
-  if (!m_controller->m_tempSubtitlePath.isEmpty()) {
-    QFile file(m_controller->m_tempSubtitlePath);
-    if (file.exists()) {
-      file.remove();
-    }
-    m_controller->m_tempSubtitlePath.clear();
-  }
+
+  QFile::remove(subtitlePath);
+  m_controller->m_tempSubtitlePath.clear();
   m_controller->clearPlayResult();
 }
 
@@ -571,25 +501,8 @@ void BiliPlaybackModule::downloadSelectedSubtitle(std::function<void(const QStri
           emit self->toastMessage(QString("字幕加载失败：%1").arg(msg));
         }
         if (onFinished) onFinished(QString());
-      });
-}
-
-void BiliPlaybackModule::launchExternalPlayerWithAudio(const QString &videoPath, const QString &audioPath) {
-  if (videoPath.isEmpty() || audioPath.isEmpty()) {
-    emit m_controller->toastMessage("播放路径不完整");
-    return;
-  }
-
-  QString v = videoPath;
-  QString a = audioPath;
-  if (v.startsWith("file://")) v = v.mid(7);
-  if (a.startsWith("file://")) a = a.mid(7);
-
-  QStringList args;
-  args << ("--force-media-title=" + externalPlayerTitle());
-  appendResumeStartArg(args);
-  args << v << ("--audio-file=" + a);
-  startExternalPlayer(args);
+      },
+      nullptr, QStringLiteral("subtitle"));
 }
 
 void BiliPlaybackModule::launchExternalPlayerWithAudioUrl(const QString &videoUrl, const QString &audioUrl) {

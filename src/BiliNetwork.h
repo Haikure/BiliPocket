@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QHash>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -29,19 +30,22 @@ public:
 
   static BiliNetwork *instance();
 
-  // 基础请求
+  // 基础请求；timeoutMs 为 0 时使用默认超时
   void get(const QString &path, const QMap<QString, QString> &params,
-           SuccessCallback onSuccess, ErrorCallback onError = nullptr);
+           SuccessCallback onSuccess, ErrorCallback onError = nullptr,
+           int timeoutMs = 0);
 
   // 下载图片
   void downloadImage(const QUrl &url, RawCallback onSuccess,
                      ErrorCallback onError = nullptr);
 
-  // 下载视频到临时文件
+  // 下载视频到临时文件；tag 区分用途（"video"/"subtitle"），
+  // 各用途独立跟踪 reply，取消时一并中止，互不覆盖。
   void downloadVideo(const QString &url, const QString &targetPath,
                      std::function<void(const QString &path)> onSuccess,
                      std::function<void(int code, const QString &msg)> onError,
-                     std::function<void(qint64 received, qint64 total)> onProgress = nullptr);
+                     std::function<void(qint64 received, qint64 total)> onProgress = nullptr,
+                     const QString &tag = QStringLiteral("video"));
 
   // 获取 API 地址
   QString apiBase() const;
@@ -99,7 +103,11 @@ private:
   // 请求跟踪（用于取消和防止泄漏）
   QMutex m_replyMutex;
   QSet<QNetworkReply *> m_activeReplies;
-  QPointer<QNetworkReply> m_videoDownloadReply;
+  // 下载请求按用途分槽跟踪（video/subtitle），合并请求单独跟踪；取消时一并中止
+  QHash<QString, QPointer<QNetworkReply>> m_downloadReplies;
+  QPointer<QNetworkReply> m_mergeReply;
+  // cancelAll 期间 abort 同步触发 finished，handleReply 据此静默取消错误
+  bool m_cancelingAll = false;
 
   // 速率限制
   QMutex m_rateMutex;

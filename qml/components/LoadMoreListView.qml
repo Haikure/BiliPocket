@@ -18,6 +18,8 @@ ListView {
     property bool hasMore: !model || model.hasMore === undefined || model.hasMore !== false
     property bool loading: !!(model && model.loading === true)
     property bool loadingMore: false
+    // 短列表内容不满一屏时同一条目数只尝试一次加载，防止死循环
+    property int lastShortCount: -1
 
     signal loadMoreRequested()
 
@@ -29,26 +31,53 @@ ListView {
     }
 
     function _maybeLoadMore() {
-        if (_horizontal) {
-            if (!atXEnd) return
-            // 短列表保护：内容撑不满时 atXEnd 恒真
-            if (contentWidth <= width + 2) return
-        } else {
-            if (!atYEnd) return
-            if (contentHeight <= height + 2) return
-        }
         if (count <= 0) return
         if (loadingMore || loading) return
         if (!hasMore) return
+        if (_horizontal) {
+            if (contentWidth > width + 2) {
+                // 正常（撑满）列表：滚到尾部才加载
+                if (!atXEnd) return
+            } else {
+                // 内容撑不满时 atXEnd 恒真，改由 count 变化驱动，同一条目数只试一次
+                if (count === lastShortCount) return
+            }
+        } else {
+            if (contentHeight > height + 2) {
+                if (!atYEnd) return
+            } else {
+                if (count === lastShortCount) return
+            }
+        }
+        lastShortCount = count
         loadingMore = true
+        // watchdog：请求未进入 loading 且无人复位时超时自行解锁
+        loadMoreWatchdog.restart()
         loadMoreRequested()
     }
 
     onAtXEndChanged: if (_horizontal && atXEnd) _maybeLoadMore()
     onAtYEndChanged: if (!_horizontal && atYEnd) _maybeLoadMore()
 
-    // 防抖复位
-    onCountChanged: loadingMore = false
+    // 防抖复位；短列表靠 count 变化驱动下一次加载尝试
+    onCountChanged: {
+        loadingMore = false
+        if (_horizontal && atXEnd) _maybeLoadMore()
+        else if (!_horizontal && atYEnd) _maybeLoadMore()
+    }
     onLoadingChanged: if (!loading) loadingMore = false
-    onModelChanged: loadingMore = false
+    onModelChanged: {
+        loadingMore = false
+        lastShortCount = -1
+    }
+
+    // watchdog：800ms 内未进入 loading（请求失败等）则复位，避免加载更多卡死
+    Timer {
+        id: loadMoreWatchdog
+        interval: 800
+        repeat: false
+        onTriggered: {
+            if (loadingMore && !loading) loadingMore = false
+        }
+    }
 }

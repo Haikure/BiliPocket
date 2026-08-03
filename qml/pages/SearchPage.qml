@@ -169,7 +169,8 @@ Rectangle {
                     id: searchInputArea
                     anchors.fill: parent
                     anchors.leftMargin: -4
-                    anchors.rightMargin: (searchInput.text.length > 0 ? 26 : 0) - 4
+                    // 文字为空时原值 0-4 为负外边距，改为非负
+                    anchors.rightMargin: searchInput.text.length > 0 ? 22 : 0
                     anchors.topMargin: -6
                     anchors.bottomMargin: -6
                     onClicked: searchKeyboard.open(searchInput.text)
@@ -232,6 +233,9 @@ Rectangle {
     onSavedResultContentXChanged: {
         if (rootRef) rootRef.searchSavedResultX = savedResultContentX
     }
+
+    // 上一次 count 变化前的条目数：用于区分“新搜索首批结果”与“加载更多追加”
+    property int lastResultCountForRestore: 0
 
     function restoreSearchPosition() {
         if (!showResults) return;
@@ -590,7 +594,14 @@ Rectangle {
         onLoadMoreRequested: if (controller) controller.search.searchMore()
 
         onCountChanged: {
-            if (searchPage.showResults) searchPage.restoreSearchPosition();
+            // 仅当“新搜索首批结果”到达（上一次 count 为 0）时才恢复滚动位置；
+            // 加载更多是向后追加，恢复会把 contentX 强制拉回旧值
+            if (searchPage.showResults
+                    && searchResultList.count > 0
+                    && searchPage.lastResultCountForRestore <= 0) {
+                searchPage.restoreSearchPosition();
+            }
+            searchPage.lastResultCountForRestore = searchResultList.count;
         }
 
         // ── 空状态提示 ──

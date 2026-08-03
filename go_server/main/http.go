@@ -310,6 +310,12 @@ func (lrw *loggingResponseWriter) Flush() {
 	}
 }
 
+// Unwrap 让 http.ResponseController 能穿透中间件链，
+// 例如合并接口需要按请求清除服务级 WriteTimeout。
+func (lrw *loggingResponseWriter) Unwrap() http.ResponseWriter {
+	return lrw.ResponseWriter
+}
+
 const loggingHeadBudget = 512
 
 // loggingRWPool 复用 loggingResponseWriter，避免每个请求都做一次 heap 分配。

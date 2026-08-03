@@ -190,13 +190,19 @@ void BiliController::startDownloadTask(const QString &videoUrl,
                                        const QString &audioUrl,
                                        const QString &videoPath,
                                        const QString &audioPath,
-                                       int finalQuality, bool playAfter,
+                                       int finalQuality,
                                        const QString &successToastPrefix,
                                        const QString &errorToastPrefix,
                                        const QString &subtitleUrl,
-                                       const QString &subtitlePath) {
+                                       const QString &subtitlePath,
+                                       const QString &finalOutputPath) {
   if (videoUrl.isEmpty() || videoPath.isEmpty()) {
     emit toastMessage("未获取到下载地址");
+    // 入口已置位 m_isDownloading，提前返回时复位
+    m_isDownloading = false;
+    m_downloadProgress = 0;
+    m_downloadStatus.clear();
+    emit downloadStateChanged();
     setIsLoading(false);
     return;
   }
@@ -207,79 +213,116 @@ void BiliController::startDownloadTask(const QString &videoUrl,
   emit downloadStateChanged();
 
   QPointer<BiliController> self(this);
-  auto lastProgressEmit = std::make_shared<qint64>(0);
-  auto lastProgressPercent = std::make_shared<int>(-1);
-  auto finishSuccess = [self, finalQuality, playAfter, successToastPrefix, subtitleUrl, subtitlePath](const QString &path) {
-    if (!self)
-      return;
 
-    auto completeDownload = [self, finalQuality, playAfter, successToastPrefix, path]() {
+  // 进度回调工厂：statusPrefix 用于区分“正在下载视频/音频”，
+  // 每个阶段各自独立节流（最多约 5 次/秒；百分比变化时立即刷新），
+  // 保证视频阶段结束后音频阶段的首次进度事件不被吞掉。
+  auto makeProgressHandler = [self](const QString &statusPrefix) {
+    auto lastProgressEmit = std::make_shared<qint64>(0);
+    auto lastProgressPercent = std::make_shared<int>(-1);
+    return [self, statusPrefix, lastProgressEmit,
+            lastProgressPercent](qint64 received, qint64 total) {
       if (!self)
         return;
 
-      self->m_isDownloading = false;
-      self->m_downloadProgress = 1.0;
-      self->m_downloadStatus = "下载完成";
-      if (playAfter) {
-        self->m_playUrl = path;
-        self->m_playQuality = finalQuality;
-        emit self->playUrlChanged();
+      const qint64 now = QDateTime::currentMSecsSinceEpoch();
+      const int percent =
+          total > 0 ? static_cast<int>((received * 100) / total) : -1;
+      // 限制 UI 更新频率：最多约 5 次/秒；百分比变化时立即刷新
+      if (*lastProgressEmit > 0 && now - *lastProgressEmit < 200 &&
+          (percent < 0 || percent == *lastProgressPercent)) {
+        return;
       }
-      emit self->downloadStateChanged();
-      self->setIsLoading(false);
-      if (!successToastPrefix.isEmpty()) {
-        emit self->toastMessage(successToastPrefix + path);
-      }
-    };
+      *lastProgressEmit = now;
+      *lastProgressPercent = percent;
 
-    if (!subtitleUrl.isEmpty() && !subtitlePath.isEmpty()) {
-      self->m_downloadStatus = "正在保存字幕...";
+      double progress = total > 0 ? static_cast<double>(received) / total : 0;
+      self->m_downloadProgress = progress;
+      QString sizeStr;
+      if (total > 0) {
+        double mb = received / (1024.0 * 1024.0);
+        double totalMb = total / (1024.0 * 1024.0);
+        sizeStr = QString("%1MB / %2MB")
+                      .arg(mb, 0, 'f', 1)
+                      .arg(totalMb, 0, 'f', 1);
+      } else {
+        double mb = received / (1024.0 * 1024.0);
+        sizeStr = QString("%1MB").arg(mb, 0, 'f', 1);
+      }
+      self->m_downloadStatus =
+          QString("%1 %2 (%3%)")
+              .arg(statusPrefix)
+              .arg(sizeStr)
+              .arg(percent >= 0 ? percent : static_cast<int>(progress * 100));
       emit self->downloadStateChanged();
-      self->m_network->downloadVideo(
-          subtitleUrl, subtitlePath,
-          [completeDownload](const QString &) { completeDownload(); },
-          [self, completeDownload](int, const QString &msg) {
-            if (self) {
-              emit self->toastMessage(QString("字幕保存失败：%1").arg(msg));
-            }
-            completeDownload();
-          });
+    };
+  };
+
+  // 两个流都下载完后：有最终输出路径则进入合并，否则直接收尾
+  auto afterDownloadsComplete = [self, videoPath, audioPath, finalOutputPath,
+                                 successToastPrefix, errorToastPrefix,
+                                 subtitleUrl, subtitlePath]() {
+    if (!self)
+      return;
+    // 取消后到达的成功回调不得复活任务
+    if (!self->m_isDownloading)
+      return;
+    if (finalOutputPath.isEmpty()) {
+      self->finishDownloadSuccess(videoPath, successToastPrefix, subtitleUrl,
+                                  subtitlePath);
       return;
     }
-
-    completeDownload();
+    self->mergeM4sPair(videoPath, audioPath, finalOutputPath,
+                       successToastPrefix, errorToastPrefix, subtitleUrl,
+                       subtitlePath);
   };
 
   m_network->downloadVideo(
       videoUrl, videoPath,
-      [self, audioUrl, audioPath, videoPath, finishSuccess](const QString &path) {
+      [self, audioUrl, audioPath, afterDownloadsComplete,
+       makeProgressHandler](const QString &path) {
         if (!self)
+          return;
+        // 取消后不再启动音频下载
+        if (!self->m_isDownloading)
           return;
 
         if (!audioUrl.isEmpty() && !audioPath.isEmpty()) {
+          // 进入音频阶段：进度归零，避免沿用视频 100% 的进度条误导
+          self->m_downloadProgress = 0;
           self->m_downloadStatus = "正在下载音频...";
           emit self->downloadStateChanged();
 
           self->m_network->downloadVideo(
               audioUrl, audioPath,
-              [finishSuccess, videoPath](const QString &) { finishSuccess(videoPath); },
+              [afterDownloadsComplete](const QString &) {
+                afterDownloadsComplete();
+              },
               [self](int, const QString &msg) {
                 if (!self)
+                  return;
+                // 用户已取消（cancelDownload 先置位），静默
+                if (!self->m_isDownloading)
                   return;
                 self->m_isDownloading = false;
                 self->m_downloadProgress = 0;
                 self->m_downloadStatus.clear();
                 emit self->downloadStateChanged();
                 self->setIsLoading(false);
-                emit self->toastMessage(QString("音频下载失败：%1").arg(msg));
-              });
+                emit self->toastMessage(QString("音频下载失败: %1").arg(msg));
+              },
+              makeProgressHandler(QStringLiteral("正在下载音频...")),
+              QStringLiteral("video"));
           return;
         }
 
-        finishSuccess(path);
+        afterDownloadsComplete();
       },
       [self, errorToastPrefix](int, const QString &msg) {
         if (!self)
+          return;
+        // 用户已取消（cancelDownload 先置位），静默
+        if (!self->m_isDownloading)
           return;
 
         self->m_isDownloading = false;
@@ -289,37 +332,126 @@ void BiliController::startDownloadTask(const QString &videoUrl,
         self->setIsLoading(false);
         emit self->toastMessage(errorToastPrefix + msg);
       },
-      [self, lastProgressEmit, lastProgressPercent](qint64 received, qint64 total) {
+      makeProgressHandler((finalQuality == 0) ? QStringLiteral("正在下载音频...")
+                                              : QStringLiteral("正在下载...")),
+      QStringLiteral("video"));
+}
+
+void BiliController::finishDownloadSuccess(const QString &path,
+                                           const QString &successToastPrefix,
+                                           const QString &subtitleUrl,
+                                           const QString &subtitlePath) {
+  QPointer<BiliController> self(this);
+
+  auto completeDownload = [self, successToastPrefix, path]() {
+    if (!self)
+      return;
+    self->m_isDownloading = false;
+    self->m_downloadProgress = 1.0;
+    self->m_downloadStatus = "下载完成";
+    emit self->downloadStateChanged();
+    self->setIsLoading(false);
+    if (!successToastPrefix.isEmpty()) {
+      emit self->toastMessage(successToastPrefix + path);
+    }
+  };
+
+  if (!subtitleUrl.isEmpty() && !subtitlePath.isEmpty()) {
+    self->m_downloadStatus = "正在保存字幕...";
+    emit self->downloadStateChanged();
+    self->m_network->downloadVideo(
+        subtitleUrl, subtitlePath,
+        [completeDownload](const QString &) { completeDownload(); },
+        [self](int, const QString &msg) {
+          if (!self)
+            return;
+          // 用户已取消，静默
+          if (!self->m_isDownloading)
+            return;
+          // 字幕失败时不再伪装成"下载完成"成功提示
+          self->m_isDownloading = false;
+          self->m_downloadProgress = 1.0;
+          self->m_downloadStatus = "下载完成（字幕保存失败）";
+          emit self->downloadStateChanged();
+          self->setIsLoading(false);
+          emit self->toastMessage(QString("下载完成，但字幕保存失败：%1").arg(msg));
+        },
+        nullptr, QStringLiteral("subtitle"));
+    return;
+  }
+
+  completeDownload();
+}
+
+void BiliController::mergeM4sPair(const QString &videoPath,
+                                  const QString &audioPath,
+                                  const QString &outputPath,
+                                  const QString &successToastPrefix,
+                                  const QString &errorToastPrefix,
+                                  const QString &subtitleUrl,
+                                  const QString &subtitlePath) {
+  if (videoPath.isEmpty() || audioPath.isEmpty() || outputPath.isEmpty()) {
+    emit toastMessage("合并参数不完整");
+    // 防御性复位，避免状态卡死（正常不可达）
+    m_isDownloading = false;
+    m_downloadProgress = 0;
+    m_downloadStatus.clear();
+    emit downloadStateChanged();
+    setIsLoading(false);
+    return;
+  }
+
+  // 合并本身就是一个下载任务阶段；断点续合场景下 m_isDownloading 尚为 false
+  m_isDownloading = true;
+  m_downloadStatus = "正在合并...";
+  m_downloadProgress = 0.99;
+  emit downloadStateChanged();
+
+  QPointer<BiliController> self(this);
+
+  QMap<QString, QString> params;
+  params["video_path"] = videoPath;
+  params["audio_path"] = audioPath;
+  params["output_path"] = outputPath;
+
+  m_network->get(
+      "/video/merge", params,
+      [self, videoPath, audioPath, outputPath, successToastPrefix, subtitleUrl,
+       subtitlePath](const QJsonObject &) {
+        if (!self)
+          return;
+        // 合并期间用户已取消：保留 m4s，不做收尾
+        if (!self->m_isDownloading)
+          return;
+
+        // 合并成功，清理 .part 残留并删除 m4s 源文件
+        QFile::remove(outputPath + ".part");
+        QFile::remove(videoPath);
+        QFile::remove(audioPath);
+        self->finishDownloadSuccess(outputPath, successToastPrefix, subtitleUrl,
+                                    subtitlePath);
+      },
+      [self, errorToastPrefix, outputPath](int code, const QString &msg) {
         if (!self)
           return;
 
-        const qint64 now = QDateTime::currentMSecsSinceEpoch();
-        const int percent = total > 0 ? static_cast<int>((received * 100) / total) : -1;
-        // 限制 UI 更新频率：最多约 5 次/秒；百分比变化时立即刷新
-        if (*lastProgressEmit > 0 && now - *lastProgressEmit < 200 &&
-            (percent < 0 || percent == *lastProgressPercent)) {
-          return;
-        }
-        *lastProgressEmit = now;
-        *lastProgressPercent = percent;
-
-        double progress = total > 0 ? static_cast<double>(received) / total : 0;
-        self->m_downloadProgress = progress;
-        QString sizeStr;
-        if (total > 0) {
-          double mb = received / (1024.0 * 1024.0);
-          double totalMb = total / (1024.0 * 1024.0);
-          sizeStr = QString("%1MB / %2MB")
-                        .arg(mb, 0, 'f', 1)
-                        .arg(totalMb, 0, 'f', 1);
-        } else {
-          double mb = received / (1024.0 * 1024.0);
-          sizeStr = QString("%1MB").arg(mb, 0, 'f', 1);
-        }
-        self->m_downloadStatus =
-            QString("正在下载... %1 (%2%)")
-                .arg(sizeStr)
-                .arg(percent >= 0 ? percent : static_cast<int>(progress * 100));
+        // 用户已取消（cancelDownload 已把 m_isDownloading 置 false）或请求被中止：
+        // 静默收尾，保留 m4s 文件，重新下载会自动续合
+        const bool userCanceled =
+            !self->m_isDownloading ||
+            code == QNetworkReply::OperationCanceledError;
+        self->m_isDownloading = false;
+        self->m_downloadProgress = 0;
+        self->m_downloadStatus.clear();
         emit self->downloadStateChanged();
-      });
+        self->setIsLoading(false);
+        if (userCanceled)
+          return;
+
+        // 真实失败：清理 Go 侧可能残留的半成品，保留 m4s 文件，重新下载会自动走合并
+        QFile::remove(outputPath + ".part");
+        emit self->toastMessage(errorToastPrefix + msg +
+                                QStringLiteral("（已保留 m4s 文件，重新下载会自动合并）"));
+      },
+      300000);
 }
