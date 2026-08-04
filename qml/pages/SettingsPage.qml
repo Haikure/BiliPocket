@@ -109,6 +109,14 @@ Rectangle {
                     checked: controller ? controller.defaultSubtitleEnabled : undefined
                     onToggled: { if (controller) controller.playback.setDefaultSubtitleEnabled(value) }
                 }
+
+                Components.ToggleRow {
+                    width: parent.width
+                    label: "优先使用MP4流"
+                    description: "优先使用MP4流，不可用时回退DASH双流"
+                    checked: controller ? controller.preferMp4Stream : undefined
+                    onToggled: { if (controller) controller.playback.setPreferMp4Stream(value) }
+                }
             }
         }
     }

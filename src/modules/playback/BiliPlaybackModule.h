@@ -36,10 +36,15 @@ public:
   Q_INVOKABLE void setVideoCardOffscreenPlaceholderEnabled(bool enabled);
   Q_INVOKABLE void setVideoDetailPreloadEnabled(bool enabled);
   Q_INVOKABLE void setDefaultSubtitleEnabled(bool enabled);
+  Q_INVOKABLE void setPreferMp4Stream(bool enabled);
   Q_INVOKABLE void launchExternalPlayerCurrentSelection();
   bool ensureDefaultSubtitleForCurrentVideo(std::function<void()> onFinished);
 
 private:
+  // 按 fnval 发起播放地址请求；fnval=1 为 MP4 单流，4048 为 DASH 双流。
+  // allowDashFallback 为 true 时，MP4 不可用会自动回退 DASH。
+  void requestPlayUrlInternal(int requestedQuality, bool audioOnly, int fnval,
+                              bool allowDashFallback);
   void fetchSubtitleListInternal(bool silent, std::function<void()> onFinished = nullptr);
   void runSubtitleListCallbacks(const QString &requestKey);
   bool shouldLoadDefaultSubtitle() const;

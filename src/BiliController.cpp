@@ -142,6 +142,7 @@ BiliController::BiliController(QObject *parent)
   m_videoCardOffscreenPlaceholderEnabled = settings.value("videoCardOffscreenPlaceholderEnabled", m_videoCardOffscreenPlaceholderEnabled).toBool();
   m_videoDetailPreloadEnabled = settings.value("videoDetailPreloadEnabled", m_videoDetailPreloadEnabled).toBool();
   m_defaultSubtitleEnabled = settings.value("defaultSubtitleEnabled", m_defaultSubtitleEnabled).toBool();
+  m_preferMp4Stream = settings.value("preferMp4Stream", m_preferMp4Stream).toBool();
 }
 
 BiliController::~BiliController() {

@@ -35,6 +35,13 @@ public:
 
 private:
   void fetchUpSeasonsPage(qint64 mid, int page);
+  // 按 fnval 获取下载地址并发起下载；fnval=1 为 MP4 单流，4048 为 DASH 双流。
+  // allowDashFallback 为 true 时，MP4 不可用会自动回退 DASH。
+  void fetchDownloadPlayUrl(int requestQuality, bool audioOnly, int fnval,
+                            bool allowDashFallback,
+                            const QString &targetPath, const QString &videoPath,
+                            const QString &audioPath, const QString &subtitleUrl,
+                            const QString &subtitlePath);
 
   BiliController *m_controller;
   qint64 m_upSearchMid = 0;

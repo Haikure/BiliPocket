@@ -88,11 +88,19 @@ void BiliPlaybackModule::fetchPlayUrl(int quality) {
 
   const bool audioOnly = (quality == 0);
   const int requestedQuality = audioOnly ? 16 : qBound(16, quality, 127);
+  // 开启"优先播放MP4流"且非纯音频时，先请求 MP4（fnval=1），不可用再回退 DASH（fnval=4048）
+  const bool preferMp4 = m_controller->m_preferMp4Stream && !audioOnly;
+  requestPlayUrlInternal(requestedQuality, audioOnly, preferMp4 ? 1 : 4048, preferMp4);
+}
+
+void BiliPlaybackModule::requestPlayUrlInternal(int requestedQuality, bool audioOnly,
+                                                int fnval, bool allowDashFallback) {
+  const int quality = audioOnly ? 0 : requestedQuality;
   const QString requestKey = QString("%1:%2:%3:%4")
                                  .arg(m_controller->m_currentVideo.bvid)
                                  .arg(m_controller->m_currentVideo.cid)
                                  .arg(quality)
-                                 .arg(4048);
+                                 .arg(fnval);
   const QString requestBvid = m_controller->m_currentVideo.bvid;
   const qint64 requestCid = m_controller->m_currentVideo.cid;
   if (m_controller->m_playUrlLoadingKey == requestKey) {
@@ -111,22 +119,50 @@ void BiliPlaybackModule::fetchPlayUrl(int quality) {
   params["cid"] = QString::number(m_controller->m_currentVideo.cid);
   params["qn"] = QString::number(requestedQuality);
   params["bvid"] = m_controller->m_currentVideo.bvid;
-  // fnval=1: 优先请求 MP4 格式，fnval=16: DASH 格式（音视频分离）
-  // 优先使用 MP4 格式以获得更好的兼容性
-  params["fnval"] = "4048";
+  // fnval=1: MP4 格式（仅 H.264）；fnval=4048: DASH 格式（音视频分离，含全部高级流）
+  params["fnval"] = QString::number(fnval);
 
   QPointer<BiliController> self(m_controller);
 
   m_controller->m_network->get(
       "/video/playurl", params,
-      [self, requestKey, requestBvid, requestCid, requestedQuality, audioOnly](const QJsonObject &data) {
-        if (!self)
+      [moduleSelf = QPointer<BiliPlaybackModule>(this), self, requestKey, requestBvid,
+       requestCid, requestedQuality, audioOnly, fnval, allowDashFallback](const QJsonObject &data) {
+        if (!moduleSelf || !self)
           return;
         if (self->m_playUrlLoadingKey != requestKey)
           return;
 
         self->m_playUrlLoadingKey.clear();
         if (self->m_currentVideo.bvid != requestBvid || self->m_currentVideo.cid != requestCid) {
+          self->setIsLoading(false);
+          return;
+        }
+
+        self->updateAcceptQualities(data);
+
+        // MP4 优先：拿到 durl 直接用单流播放，拿不到则回退 DASH 双流
+        if (!audioOnly && fnval == 1) {
+          const QString mp4Url = self->pickMp4Url(data);
+          if (!mp4Url.isEmpty()) {
+            int finalQuality = requestedQuality;
+            int apiQuality = data.value("quality").toInt(0);
+            if (apiQuality > 0) {
+              finalQuality = apiQuality;
+            }
+            // dash 双流留空 → launchExternalPlayerCurrentSelection 走单 URL 播放分支
+            self->setPlayResult(mp4Url, finalQuality, QString(), QString());
+            self->setIsLoading(false);
+            emit self->playbackReady(mp4Url);
+            return;
+          }
+          if (allowDashFallback) {
+            // 先平衡本次请求的 loading 计数，再发起 DASH 回退请求
+            self->setIsLoading(false);
+            moduleSelf->requestPlayUrlInternal(requestedQuality, false, 4048, false);
+            return;
+          }
+          emit self->toastMessage("未获取到播放地址");
           self->setIsLoading(false);
           return;
         }
@@ -138,8 +174,6 @@ void BiliPlaybackModule::fetchPlayUrl(int quality) {
         if (!audioOnly && apiQuality > 0) {
           finalQuality = apiQuality;
         }
-
-        self->updateAcceptQualities(data);
 
         if (audioOnly) {
           auto dash = self->pickDashUrls(data, requestedQuality);
@@ -772,6 +806,15 @@ void BiliPlaybackModule::setDefaultSubtitleEnabled(bool enabled) {
       fetchSubtitleList(true);
     }
   }
+  emit m_controller->preferenceSettingsChanged();
+}
+
+void BiliPlaybackModule::setPreferMp4Stream(bool enabled) {
+  if (m_controller->m_preferMp4Stream == enabled) return;
+  m_controller->m_preferMp4Stream = enabled;
+  QSettings settings("BiliPocket", "BiliPlugin");
+  settings.setValue("preferMp4Stream", m_controller->m_preferMp4Stream);
+  settings.sync();
   emit m_controller->preferenceSettingsChanged();
 }
 

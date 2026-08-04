@@ -112,6 +112,7 @@ class BiliController : public QObject {
   Q_PROPERTY(bool videoCardOffscreenPlaceholderEnabled READ videoCardOffscreenPlaceholderEnabled NOTIFY preferenceSettingsChanged)
   Q_PROPERTY(bool videoDetailPreloadEnabled READ videoDetailPreloadEnabled NOTIFY preferenceSettingsChanged)
   Q_PROPERTY(bool defaultSubtitleEnabled READ defaultSubtitleEnabled NOTIFY preferenceSettingsChanged)
+  Q_PROPERTY(bool preferMp4Stream READ preferMp4Stream NOTIFY preferenceSettingsChanged)
 
   // 登录状态
   Q_PROPERTY(bool loggedIn READ loggedIn NOTIFY loginStateChanged)
@@ -222,6 +223,7 @@ public:
   bool videoCardOffscreenPlaceholderEnabled() const { return m_videoCardOffscreenPlaceholderEnabled; }
   bool videoDetailPreloadEnabled() const { return m_videoDetailPreloadEnabled; }
   bool defaultSubtitleEnabled() const { return m_defaultSubtitleEnabled; }
+  bool preferMp4Stream() const { return m_preferMp4Stream; }
 
   bool loggedIn() const;
   qint64 upUserMid() const { return m_upUserMid; }
@@ -451,6 +453,7 @@ private:
   bool m_videoCardOffscreenPlaceholderEnabled = false;
   bool m_videoDetailPreloadEnabled = false;
   bool m_defaultSubtitleEnabled = false;
+  bool m_preferMp4Stream = false;
   bool m_subtitleSelectionOverridden = false;
   QPointer<QNetworkReply> m_downloadReply;
   QPointer<QProcess> m_externalPlayerProcess;

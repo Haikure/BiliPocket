@@ -1190,6 +1190,18 @@ void BiliUpModule::downloadVideoToDisk(int quality) {
   m_controller->m_downloadStatus = "正在获取下载地址...";
   emit m_controller->downloadStateChanged();
 
+  // 开启"优先播放MP4流"且非纯音频时，先请求 MP4（fnval=1），不可用再回退 DASH（fnval=4048）
+  const bool preferMp4 = m_controller->m_preferMp4Stream && !audioOnly;
+  fetchDownloadPlayUrl(requestQuality, audioOnly, preferMp4 ? 1 : 4048, preferMp4,
+                       targetPath, videoPath, audioPath, subtitleUrl, subtitlePath);
+}
+
+void BiliUpModule::fetchDownloadPlayUrl(int requestQuality, bool audioOnly, int fnval,
+                                        bool allowDashFallback,
+                                        const QString &targetPath, const QString &videoPath,
+                                        const QString &audioPath, const QString &subtitleUrl,
+                                        const QString &subtitlePath) {
+  const int quality = audioOnly ? 0 : requestQuality;
   m_controller->setIsLoading(true);
 
   QMap<QString, QString> params;
@@ -1197,17 +1209,57 @@ void BiliUpModule::downloadVideoToDisk(int quality) {
   params["cid"] = QString::number(m_controller->m_currentVideo.cid);
   params["qn"] = QString::number(requestQuality);
   params["bvid"] = m_controller->m_currentVideo.bvid;
-  params["fnval"] = "4048"; // DASH：音视频分离，下载后本地合并
+  // fnval=1: MP4 格式（仅 H.264），单文件直接落盘无需合并；fnval=4048: DASH 双流，下载后本地合并
+  params["fnval"] = QString::number(fnval);
 
   QPointer<BiliController> self(m_controller);
 
   m_controller->m_network->get(
       "/video/playurl", params,
-      [self, targetPath, videoPath, audioPath, quality, requestQuality, audioOnly,
-       subtitleUrl, subtitlePath](const QJsonObject &data) {
-        if (!self) return;
+      [moduleSelf = QPointer<BiliUpModule>(this), self, targetPath, videoPath, audioPath,
+       quality, requestQuality, audioOnly, subtitleUrl, subtitlePath, fnval,
+       allowDashFallback](const QJsonObject &data) {
+        if (!moduleSelf || !self) return;
 
         self->updateAcceptQualities(data);
+
+        // MP4 优先：有 durl 直接单文件下载（不产生 m4s、不合并），否则回退 DASH
+        if (!audioOnly && fnval == 1) {
+          const QString mp4Url = self->pickMp4Url(data);
+          if (!mp4Url.isEmpty()) {
+            int finalQuality = requestQuality;
+            int apiQuality = data.value("quality").toInt(0);
+            if (apiQuality > 0) {
+              finalQuality = apiQuality;
+            }
+            self->m_downloadStatus = "准备下载...";
+            emit self->downloadStateChanged();
+            emit self->toastMessage("开始下载...");
+            self->startDownloadTask(mp4Url, QString(), targetPath, QString(),
+                                    finalQuality,
+                                    QStringLiteral("下载完成: "),
+                                    QStringLiteral("下载失败: "),
+                                    subtitleUrl, subtitlePath,
+                                    QString());
+            return;
+          }
+          if (allowDashFallback) {
+            // 先平衡本次请求的 loading 计数，再发起 DASH 回退请求（下载状态已置位，无需重复）
+            self->setIsLoading(false);
+            moduleSelf->fetchDownloadPlayUrl(requestQuality, false, 4048, false,
+                                             targetPath, videoPath, audioPath,
+                                             subtitleUrl, subtitlePath);
+            return;
+          }
+          emit self->toastMessage("未获取到下载地址");
+          // 入口已置位下载状态，提前返回需复位
+          self->m_isDownloading = false;
+          self->m_downloadProgress = 0;
+          self->m_downloadStatus.clear();
+          emit self->downloadStateChanged();
+          self->setIsLoading(false);
+          return;
+        }
 
         QString downloadUrl;
         QString dashAudioUrl;
