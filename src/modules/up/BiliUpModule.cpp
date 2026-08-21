@@ -1221,14 +1221,21 @@ void BiliUpModule::fetchDownloadPlayUrl(int requestQuality, bool audioOnly, int 
        allowDashFallback](const QJsonObject &data) {
         if (!moduleSelf || !self) return;
 
-        self->updateAcceptQualities(data);
-
         // MP4 优先：有 durl 直接单文件下载（不产生 m4s、不合并），否则回退 DASH
         if (!audioOnly && fnval == 1) {
           const QString mp4Url = self->pickMp4Url(data);
           if (!mp4Url.isEmpty()) {
-            int finalQuality = requestQuality;
             int apiQuality = data.value("quality").toInt(0);
+            // 请求的清晰度没有 MP4 流时，API 会静默降级返回更低的 MP4（如请求 1080P 返回 720P）。
+            // 此时视为"未找到 MP4 流"，回退 DASH 以获取目标清晰度，避免下载被降级。
+            if (allowDashFallback && apiQuality > 0 && apiQuality < requestQuality) {
+              self->setIsLoading(false);
+              moduleSelf->fetchDownloadPlayUrl(requestQuality, false, 4048, false,
+                                               targetPath, videoPath, audioPath,
+                                               subtitleUrl, subtitlePath);
+              return;
+            }
+            int finalQuality = requestQuality;
             if (apiQuality > 0) {
               finalQuality = apiQuality;
             }
@@ -1260,6 +1267,10 @@ void BiliUpModule::fetchDownloadPlayUrl(int requestQuality, bool audioOnly, int 
           self->setIsLoading(false);
           return;
         }
+
+        // 仅用 DASH（fnval=4048）响应刷新可用清晰度：MP4（fnval=1）响应只含 MP4 支持的
+        // 子集清晰度，用它刷新会把完整列表（如 1080P）冲掉，导致列表在播放/下载瞬间缩水。
+        self->updateAcceptQualities(data);
 
         QString downloadUrl;
         QString dashAudioUrl;
