@@ -633,7 +633,13 @@ Rectangle {
     Components.ErrorOverlay {
         anchors.fill: parent
         errorMessage: controller.globalError
+        retryText: controller.goServerRestartRequired ? "重启" : "重试"
+        dismissText: controller.goServerRestartRequired ? "取消" : "关闭"
         onRetryClicked: {
+            if (controller.goServerRestartRequired) {
+                controller.up.restartGoServer();
+                return;
+            }
             controller.clearError();
             if (currentPage === "home") controller.feed.fetchPopular();
             else if (currentPage === "dynamic") controller.feed.fetchDynamic("all");

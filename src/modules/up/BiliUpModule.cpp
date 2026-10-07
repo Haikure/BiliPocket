@@ -1036,14 +1036,15 @@ void BiliUpModule::playVideoPart(int index) {
 }
 
 void BiliUpModule::restartGoServer() {
+    BiliNetwork *network = m_controller->m_network;
+    if (!network || !network->beginApiServerRestart()) return;
     emit m_controller->toastMessage("正在重启 Go 服务端...");
     // 重启期间的新请求会在 BiliNetwork 中排队，完成后统一放行
-    BiliNetwork::instance()->setApiServerReady(false);
     QPointer<BiliController> self(m_controller);
-    bili_restartApiServerAsync([self](bool ok) {
-        BiliNetwork *network = BiliNetwork::instance();
-        if (network) {
-            network->setApiServerReady(true);
+    QPointer<BiliNetwork> safeNetwork(network);
+    bili_restartApiServerAsync([self, safeNetwork](bool ok) {
+        if (safeNetwork) {
+            safeNetwork->finishApiServerRestart(ok);
         }
         if (!self) return;
         emit self->toastMessage(ok ? "Go 服务端已重启" : "Go 服务端重启失败");

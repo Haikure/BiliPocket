@@ -1194,7 +1194,8 @@ Rectangle {
 
                                 Image {
                                     anchors.fill: parent
-                                    source: commentsPage.commentThumbSource(commentsPage.firstPicture(selectedComment.pictures))
+                                    source: selectedComment
+                                            ? commentsPage.commentThumbSource(commentsPage.firstPicture(selectedComment.pictures)) : ""
                                     sourceSize: Qt.size(commentsPage._commentPictureWidth * 2, commentsPage._commentPictureHeight * 2)
                                     fillMode: Image.PreserveAspectCrop
                                     asynchronous: true
@@ -1203,7 +1204,10 @@ Rectangle {
 
                                 MouseArea {
                                     anchors.fill: parent
-                                    onClicked: commentsPage.openCommentImage(commentsPage.firstPicture(selectedComment.pictures))
+                                    onClicked: {
+                                        if (selectedComment)
+                                            commentsPage.openCommentImage(commentsPage.firstPicture(selectedComment.pictures))
+                                    }
                                 }
                             }
                         }

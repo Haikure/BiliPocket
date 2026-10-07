@@ -13,6 +13,7 @@ class BiliPlaybackModule : public QObject {
   Q_OBJECT
 public:
   explicit BiliPlaybackModule(BiliController *controller);
+  ~BiliPlaybackModule() override;
   Q_INVOKABLE void fetchPlayUrl(int quality = 64);
   Q_INVOKABLE void fetchAcceptQualities(int quality = 64);
   Q_INVOKABLE void cancelDownload();
@@ -37,8 +38,17 @@ public:
   Q_INVOKABLE void setVideoDetailPreloadEnabled(bool enabled);
   Q_INVOKABLE void setDefaultSubtitleEnabled(bool enabled);
   Q_INVOKABLE void setPreferMp4Stream(bool enabled);
+  Q_INVOKABLE void setUseEmbeddedPlayer(bool enabled);
+  Q_INVOKABLE void prepareEmbeddedPlayback();
+  Q_INVOKABLE void cancelEmbeddedPlayback();
+  Q_INVOKABLE void reportEmbeddedProgress(double position, double duration, bool finished = false);
   Q_INVOKABLE void launchExternalPlayerCurrentSelection();
   bool ensureDefaultSubtitleForCurrentVideo(std::function<void()> onFinished);
+
+signals:
+  void embeddedPlaybackReady(const QString &videoUrl, const QString &audioUrl,
+                             const QString &subtitleUrl, int startSeconds);
+  void embeddedPlaybackFailed(const QString &message);
 
 private:
   // 按 fnval 发起播放地址请求；fnval=1 为 MP4 单流，4048 为 DASH 双流。
@@ -59,4 +69,11 @@ private:
   QString m_subtitleCallbackKey;
   QString m_defaultSubtitleAttemptedKey;
   std::vector<std::function<void()>> m_subtitleCallbacks;
+  quint64 m_embeddedGeneration = 0;
+  qint64 m_embeddedAid = 0;
+  qint64 m_embeddedCid = 0;
+  QString m_embeddedBvid;
+  QString m_embeddedSubtitlePath;
+  int m_embeddedDuration = 0;
+  bool m_embeddedActive = false;
 };

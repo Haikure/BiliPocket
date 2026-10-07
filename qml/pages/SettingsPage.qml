@@ -112,6 +112,14 @@ Rectangle {
 
                 Components.ToggleRow {
                     width: parent.width
+                    label: "使用嵌入播放器"
+                    description: "在应用内播放，支持暂停和拖动进度"
+                    checked: controller ? controller.useEmbeddedPlayer : false
+                    onToggled: { if (controller) controller.playback.setUseEmbeddedPlayer(value) }
+                }
+
+                Components.ToggleRow {
+                    width: parent.width
                     label: "优先使用MP4流"
                     description: "优先使用MP4流，不可用时回退DASH双流"
                     checked: controller ? controller.preferMp4Stream : undefined

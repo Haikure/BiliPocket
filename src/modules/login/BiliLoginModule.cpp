@@ -284,17 +284,22 @@ void BiliLoginModule::pollSmsLogin() {
 
     QNetworkReply *importReply = self->m_smsNam->post(importReq, QJsonDocument(payload).toJson(QJsonDocument::Compact));
     if (!importReply) { self->m_smsImporting = false; return; }
+    self->m_network->prepareApiRequest(importReply);
 
     QObject::connect(importReply, &QNetworkReply::finished, self, [self, importReply]() {
       if (!self) { if (importReply) importReply->deleteLater(); return; }
 
       const int st = importReply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+      self->m_network->observeApiReply(importReply);
       importReply->deleteLater();
 
       self->m_smsImporting = false;
 
-      if (st < 200 || st >= 300) {
-        self->m_smsLastError = QString("导入短信登录 cookies 失败：HTTP %1").arg(st);
+      if (importReply->error() != QNetworkReply::NoError || st < 200 || st >= 300) {
+        int code = importReply->error();
+        QString message = QString("导入短信登录 cookies 失败：HTTP %1").arg(st);
+        self->m_network->checkApiServerFailure(importReply, code, message);
+        self->m_smsLastError = message;
         return;
       }
 

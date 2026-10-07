@@ -114,6 +114,7 @@ class BiliController : public QObject {
   Q_PROPERTY(bool videoDetailPreloadEnabled READ videoDetailPreloadEnabled NOTIFY preferenceSettingsChanged)
   Q_PROPERTY(bool defaultSubtitleEnabled READ defaultSubtitleEnabled NOTIFY preferenceSettingsChanged)
   Q_PROPERTY(bool preferMp4Stream READ preferMp4Stream NOTIFY preferenceSettingsChanged)
+  Q_PROPERTY(bool useEmbeddedPlayer READ useEmbeddedPlayer NOTIFY preferenceSettingsChanged)
 
   // 登录状态
   Q_PROPERTY(bool loggedIn READ loggedIn NOTIFY loginStateChanged)
@@ -166,6 +167,7 @@ class BiliController : public QObject {
 
   // 全局错误
   Q_PROPERTY(QString globalError READ globalError NOTIFY globalErrorChanged)
+  Q_PROPERTY(bool goServerRestartRequired READ goServerRestartRequired NOTIFY globalErrorChanged)
   Q_PROPERTY(bool isLoading READ isLoading NOTIFY isLoadingChanged)
 
 public:
@@ -226,6 +228,7 @@ public:
   bool videoDetailPreloadEnabled() const { return m_videoDetailPreloadEnabled; }
   bool defaultSubtitleEnabled() const { return m_defaultSubtitleEnabled; }
   bool preferMp4Stream() const { return m_preferMp4Stream; }
+  bool useEmbeddedPlayer() const { return m_useEmbeddedPlayer; }
 
   bool loggedIn() const;
   qint64 upUserMid() const { return m_upUserMid; }
@@ -271,6 +274,7 @@ public:
 
   int seasonVideoTotal() const { return m_seasonVideoTotal; }
   QString globalError() const;
+  bool goServerRestartRequired() const { return m_goServerRestartRequired; }
   bool isLoading() const;
   QObject *feed() const;
   QObject *comments() const;
@@ -460,6 +464,7 @@ private:
   bool m_videoDetailPreloadEnabled = false;
   bool m_defaultSubtitleEnabled = false;
   bool m_preferMp4Stream = false;
+  bool m_useEmbeddedPlayer = false;
   bool m_subtitleSelectionOverridden = false;
   QPointer<QNetworkReply> m_downloadReply;
   QPointer<QProcess> m_externalPlayerProcess;
@@ -500,6 +505,7 @@ private:
   bool m_userIsVip;
 
   QString m_globalError;
+  bool m_goServerRestartRequired = false;
   bool m_isLoading;
 
   // 加载计数器（多个异步请求同时进行时正确管理 isLoading）

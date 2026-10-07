@@ -118,9 +118,23 @@ BiliController::BiliController(QObject *parent)
       m_destroying(false) {
   connect(m_network, &BiliNetwork::networkError, this,
           [this](const QString &msg) {
-            if (!m_destroying)
+            if (!m_destroying && !m_goServerRestartRequired)
               setGlobalError(msg);
           });
+  connect(m_network, &BiliNetwork::apiServerExited, this, [this]() {
+    if (m_destroying) return;
+    m_goServerRestartRequired = true;
+    setGlobalError(QStringLiteral("Go 进程已结束，是否重启？"));
+  });
+  connect(m_network, &BiliNetwork::apiServerRestartFailed, this, [this]() {
+    if (m_destroying) return;
+    m_goServerRestartRequired = true;
+    setGlobalError(QStringLiteral("Go 服务端重启失败，是否重试？"));
+  });
+  connect(m_network, &BiliNetwork::apiServerRecovered, this, [this]() {
+    if (!m_destroying && m_goServerRestartRequired)
+      clearError();
+  });
 
   // 默认可用清晰度
   m_acceptQualities = {16, 32, 64};
@@ -143,6 +157,7 @@ BiliController::BiliController(QObject *parent)
   m_videoDetailPreloadEnabled = settings.value("videoDetailPreloadEnabled", m_videoDetailPreloadEnabled).toBool();
   m_defaultSubtitleEnabled = settings.value("defaultSubtitleEnabled", m_defaultSubtitleEnabled).toBool();
   m_preferMp4Stream = settings.value("preferMp4Stream", m_preferMp4Stream).toBool();
+  m_useEmbeddedPlayer = settings.value("useEmbeddedPlayer", m_useEmbeddedPlayer).toBool();
 }
 
 BiliController::~BiliController() {
@@ -463,7 +478,10 @@ QObject *BiliController::up() const { return m_upModule.get(); }
 QObject *BiliController::season() const { return m_seasonModule.get(); }
 QObject *BiliController::viewer() const { return m_viewerModule.get(); }
 
-void BiliController::clearError() { setGlobalError(""); }
+void BiliController::clearError() {
+  m_goServerRestartRequired = false;
+  setGlobalError("");
+}
 
 void BiliController::cancelAll() {
   // 先落定状态再 abort：abort() 会同步触发 onError，避免取消被误报为失败
@@ -1121,6 +1139,7 @@ void attach_engine(QQmlEngine *engine) {
 
     // 在引擎/GUI 线程首次触及 BiliNetwork，保证 QNAM 线程亲和正确
     BiliNetwork *network = BiliNetwork::instance();
+    network->resetApiServerState();
     // 插件热重载后若上次 destroy 关过闸又丢了回调，这里兜底放行
     network->setApiServerReady(true);
     s_imageProvider = new BiliImageProvider(network);
@@ -1150,6 +1169,7 @@ void destroy_plugin() {
   BiliNetwork *network = BiliNetwork::instance();
   if (network) {
     network->cancelAllRequests();
+    network->resetApiServerState();
     network->setApiServerReady(true);
   }
 
