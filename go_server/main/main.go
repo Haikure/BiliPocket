@@ -45,6 +45,14 @@ func main() {
 	if port == "" {
 		port = "8000"
 	}
+	processLock, err := acquireProcessLock("/tmp", port)
+	if err != nil {
+		logError("❌ 服务进程锁不可用: %s", err.Error())
+		_ = asyncLogFlush(asyncLogShutdownTimeout)
+		os.Exit(1)
+	}
+	defer processLock.Close()
+
 	debug := os.Getenv("DEBUG") == "true"
 	host := "127.0.0.1"
 	if debug {

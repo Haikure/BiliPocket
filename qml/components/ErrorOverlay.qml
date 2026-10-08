@@ -17,6 +17,7 @@ Rectangle {
     property bool hasError: errorMessage.length > 0
     property string errorMessage: ""
     property string retryText: "重试"
+    property string dismissText: "关闭"
 
     signal retryClicked()
     signal dismissed()
@@ -26,7 +27,7 @@ Rectangle {
 
     Rectangle {
         anchors.centerIn: parent
-        width: Math.min(parent.width * 0.85, 260)
+        width: Math.min(parent.width * 0.85, Theme.s * 260)
         height: errorCol.height + Theme.spacingLarge * 2
         radius: Theme.radiusXL
         color: Theme.bgCard
@@ -113,7 +114,7 @@ Rectangle {
                     Behavior on scale { NumberAnimation { duration: Theme.animFast } }
 
                     Text {
-                        text: "关闭"
+                        text: dismissText
                         color: Theme.textSecondary
                         font.family: Theme.fontFamily
                         font.pixelSize: Theme.fontBody

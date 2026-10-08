@@ -24,11 +24,14 @@
 #include <QSettings>
 #include <QStandardPaths>
 #include <QStringListModel>
+#include <QTemporaryFile>
 #include <QTimer>
 #include <QUrl>
 #include <QtGlobal>
 #include <algorithm>
+#include <cmath>
 #include <functional>
+#include <limits>
 #include <utility>
 
 namespace {
@@ -76,7 +79,19 @@ QString biliHeartbeatScriptOpts(qint64 aid, qint64 cid, const QString &bvid, int
 } // namespace
 
 BiliPlaybackModule::BiliPlaybackModule(BiliController *controller)
-    : QObject(controller), m_controller(controller) {}
+    : QObject(controller), m_controller(controller) {
+  connect(controller, &BiliController::videoDetailChanged, this, [this]() {
+    if (m_embeddedCid > 0 &&
+        (m_embeddedCid != m_controller->videoCid() ||
+         m_embeddedBvid != m_controller->videoBvid())) {
+      cancelEmbeddedPlayback();
+    }
+  });
+}
+
+BiliPlaybackModule::~BiliPlaybackModule() {
+  cancelEmbeddedPlayback();
+}
 
 // ====== API: 播放地址 ======
 
@@ -331,6 +346,7 @@ void BiliPlaybackModule::cancelDownload() {
 }
 
 void BiliPlaybackModule::cleanupTempSubtitle() {
+  cancelEmbeddedPlayback();
   // 清掉请求 key，让页面销毁后迟到的 fetch 回调直接 return
   m_controller->m_playUrlLoadingKey.clear();
   m_controller->m_acceptQualitiesLoadingKey.clear();
@@ -825,6 +841,134 @@ void BiliPlaybackModule::setPreferMp4Stream(bool enabled) {
   settings.setValue("preferMp4Stream", m_controller->m_preferMp4Stream);
   settings.sync();
   emit m_controller->preferenceSettingsChanged();
+}
+
+void BiliPlaybackModule::setUseEmbeddedPlayer(bool enabled) {
+  if (m_controller->m_useEmbeddedPlayer == enabled) return;
+  m_controller->m_useEmbeddedPlayer = enabled;
+  QSettings settings("BiliPocket", "BiliPlugin");
+  settings.setValue("useEmbeddedPlayer", enabled);
+  settings.sync();
+  emit m_controller->preferenceSettingsChanged();
+}
+
+void BiliPlaybackModule::cancelEmbeddedPlayback() {
+  ++m_embeddedGeneration;
+  m_embeddedActive = false;
+  m_embeddedAid = 0;
+  m_embeddedCid = 0;
+  m_embeddedBvid.clear();
+  m_embeddedDuration = 0;
+  if (!m_embeddedSubtitlePath.isEmpty()) {
+    QFile::remove(m_embeddedSubtitlePath);
+    m_embeddedSubtitlePath.clear();
+  }
+}
+
+void BiliPlaybackModule::prepareEmbeddedPlayback() {
+  cancelEmbeddedPlayback();
+  const bool separateAudio = !m_controller->m_dashVideoUrl.isEmpty() &&
+                             !m_controller->m_dashAudioUrl.isEmpty();
+  const QString videoUrl = separateAudio ? m_controller->m_dashVideoUrl : m_controller->m_playUrl;
+  const QString audioUrl = separateAudio ? m_controller->m_dashAudioUrl : QString();
+  const auto validStream = [](const QString &value) {
+    const QUrl url(value);
+    return url.isValid() && !url.host().isEmpty() &&
+           (url.scheme() == "http" || url.scheme() == "https");
+  };
+  if (!validStream(videoUrl) || (!audioUrl.isEmpty() && !validStream(audioUrl))) {
+    emit embeddedPlaybackFailed(QStringLiteral("播放地址尚未准备好或无效"));
+    return;
+  }
+  if (m_controller->videoAid() <= 0 || m_controller->videoCid() <= 0 ||
+      m_controller->videoBvid().isEmpty()) {
+    emit embeddedPlaybackFailed(QStringLiteral("视频信息不完整，无法播放"));
+    return;
+  }
+
+  m_embeddedAid = m_controller->videoAid();
+  m_embeddedCid = m_controller->videoCid();
+  m_embeddedBvid = m_controller->videoBvid();
+  m_embeddedDuration = currentPartPlaybackInfo(m_embeddedCid, m_controller->m_currentVideo.duration,
+                                               m_controller->m_videoPartModel).duration;
+  const quint64 generation = m_embeddedGeneration;
+  int startSeconds = resumeStartSeconds();
+  if (m_embeddedDuration > 0 && startSeconds >= m_embeddedDuration) startSeconds = 0;
+  QPointer<BiliPlaybackModule> self(this);
+  const auto isCurrent = [self, generation]() {
+    return self && self->m_embeddedGeneration == generation &&
+           self->m_embeddedCid == self->m_controller->videoCid() &&
+           self->m_embeddedBvid == self->m_controller->videoBvid();
+  };
+  const auto ready = [self, isCurrent, videoUrl, audioUrl, startSeconds](const QString &subtitleUrl) {
+    if (!isCurrent()) return;
+    self->m_embeddedActive = true;
+    emit self->embeddedPlaybackReady(videoUrl, audioUrl, subtitleUrl, startSeconds);
+  };
+  const auto loadSubtitle = [self, isCurrent, ready]() {
+    if (!isCurrent()) return;
+    const QString subtitleUrl = self->m_controller->selectedSubtitleAssUrl();
+    if (subtitleUrl.isEmpty()) {
+      ready(QString());
+      return;
+    }
+    // The embedded plugin accepts local ASS files. Fetch bytes first so a cancelled
+    // preparation never leaves a partially written subtitle or starts another video.
+    self->m_controller->m_network->downloadImage(
+        QUrl(subtitleUrl),
+        [self, isCurrent, ready](const QByteArray &data) {
+          if (!isCurrent()) return;
+          QTemporaryFile subtitle(QDir(QStandardPaths::writableLocation(QStandardPaths::TempLocation))
+                                      .filePath(QStringLiteral("bili_embedded_XXXXXX.ass")));
+          if (!subtitle.open() || subtitle.write(data) != data.size() || !subtitle.flush()) {
+            emit self->m_controller->toastMessage(QStringLiteral("字幕临时文件写入失败，将继续播放"));
+            ready(QString());
+            return;
+          }
+          self->m_embeddedSubtitlePath = subtitle.fileName();
+          subtitle.setAutoRemove(false);
+          subtitle.close();
+          ready(QUrl::fromLocalFile(self->m_embeddedSubtitlePath).toString());
+        },
+        [self, isCurrent, ready](int, const QString &message) {
+          if (!isCurrent()) return;
+          emit self->m_controller->toastMessage(QStringLiteral("字幕加载失败：%1").arg(message));
+          ready(QString());
+        });
+  };
+  if (!ensureDefaultSubtitleForCurrentVideo(loadSubtitle)) {
+    loadSubtitle();
+  }
+}
+
+void BiliPlaybackModule::reportEmbeddedProgress(double position, double duration, bool finished) {
+  if (!m_embeddedActive || m_embeddedCid != m_controller->videoCid() ||
+      m_embeddedBvid != m_controller->videoBvid() || !std::isfinite(position) || position < 0) {
+    return;
+  }
+  const double maxSeconds = std::numeric_limits<int>::max();
+  const int durationSeconds = std::isfinite(duration) && duration > 0
+                                 ? static_cast<int>(qMin(duration, maxSeconds)) : m_embeddedDuration;
+  int seconds = static_cast<int>(qMin(position, maxSeconds));
+  if (durationSeconds > 0) seconds = qMin(seconds, durationSeconds);
+  if (finished && durationSeconds > 0) seconds = durationSeconds;
+  m_controller->m_playbackProgressCid = m_embeddedCid;
+  m_controller->m_playbackProgressSeconds = seconds;
+  emit m_controller->playbackProgressChanged();
+
+  // The QML player reports periodically and on pause/close; anonymous playback
+  // still updates local resume state without submitting a login-only heartbeat.
+  if (m_controller->loggedIn()) {
+    QMap<QString, QString> params;
+    params["aid"] = QString::number(m_embeddedAid);
+    params["cid"] = QString::number(m_embeddedCid);
+    params["bvid"] = m_embeddedBvid;
+    params["played_time"] = finished ? QStringLiteral("-1") : QString::number(seconds);
+    if (durationSeconds > 0) params["video_duration"] = QString::number(durationSeconds);
+    m_controller->m_network->get("/player/heartbeat", params,
+                               [](const QJsonObject &) {}, [](int, const QString &) {});
+  }
+  if (finished) m_embeddedActive = false;
 }
 
 void BiliPlaybackModule::runSubtitleListCallbacks(const QString &requestKey) {

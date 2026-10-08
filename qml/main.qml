@@ -633,7 +633,13 @@ Rectangle {
     Components.ErrorOverlay {
         anchors.fill: parent
         errorMessage: controller.globalError
+        retryText: controller.goServerRestartRequired ? "重启" : "重试"
+        dismissText: controller.goServerRestartRequired ? "取消" : "关闭"
         onRetryClicked: {
+            if (controller.goServerRestartRequired) {
+                controller.up.restartGoServer();
+                return;
+            }
             controller.clearError();
             if (currentPage === "home") controller.feed.fetchPopular();
             else if (currentPage === "dynamic") controller.feed.fetchDynamic("all");
@@ -694,9 +700,9 @@ Rectangle {
 
     Component.onCompleted: {
         // 屏幕适配：按实际高度缩放设计稿（2代 320x170→s=1，3代 800x254→s≈1.49）
-        Theme.screenW = width
-        Theme.screenH = height
-        Theme.s = height / Theme.designH
+        Theme.screenW = Qt.binding(function() { return root.width })
+        Theme.screenH = Qt.binding(function() { return root.height })
+        Theme.s = Qt.binding(function() { return root.height > 0 ? root.height / Theme.designH : 1 })
         console.log("=== BiliPlugin Loaded ===", width, "x", height,
                     "scale=", Theme.s, "sv=", Theme.sv, "wide=", Theme.wide);
     }

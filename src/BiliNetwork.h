@@ -53,6 +53,15 @@ public:
   // 未就绪时 get() 请求进入队列，就绪后自动发出（仅主线程调用）
   void setApiServerReady(bool ready);
 
+  // 主 Go 请求的故障识别；直连 POST 也复用这组入口。
+  static constexpr int ApiServerExitedError = -18;
+  void prepareApiRequest(QNetworkReply *reply);
+  void observeApiReply(QNetworkReply *reply);
+  bool checkApiServerFailure(QNetworkReply *reply, int &code, QString &message);
+  bool beginApiServerRestart();
+  void finishApiServerRestart(bool ok);
+  void resetApiServerState();
+
   // 取消所有正在进行的请求
   Q_INVOKABLE void cancelAllRequests();
   // 单独取消视频下载
@@ -60,8 +69,12 @@ public:
 
 signals:
   void networkError(const QString &message);
+  void apiServerExited();
+  void apiServerRecovered();
+  void apiServerRestartFailed();
 
 private:
+  friend class BiliNetworkTest;
   explicit BiliNetwork(QObject *parent = nullptr);
   ~BiliNetwork();
 
@@ -79,10 +92,19 @@ private:
   void trackReply(QNetworkReply *reply);
   void untrackReply(QNetworkReply *reply);
   void flushPendingRequests();
+  bool isApiUrl(const QUrl &url) const;
+  bool isCurrentApiReply(QNetworkReply *reply) const;
+  void clearApiServerFailure();
 
   QNetworkAccessManager *m_nam;
   QString m_apiBase;
+  QString m_apiServerLockPath;
   int m_requestTimeout;
+  quint64 m_apiGeneration = 0;
+  quint64 m_apiRequestSerial = 0;
+  quint64 m_apiFailureSerial = 0;
+  bool m_apiServerExitReported = false;
+  bool m_apiServerRestarting = false;
 
   // 就绪前的请求排队
   struct PendingRequest {

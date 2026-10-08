@@ -13,6 +13,7 @@ func setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/dynamic/feed", handleDynamicFeed)
 	mux.HandleFunc("/search", handleSearch)
 	mux.HandleFunc("/video/info", handleVideoInfo)
+	mux.HandleFunc("/video/tags", handleVideoTags)
 	mux.HandleFunc("/video/related", handleVideoRelated)
 	mux.HandleFunc("/video/relation", handleVideoRelation)
 	mux.HandleFunc("/video/playurl", handleVideoPlayurl)

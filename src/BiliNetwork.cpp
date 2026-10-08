@@ -8,13 +8,63 @@
 #include <QNetworkRequest>
 #include <QRunnable>
 #include <QThread>
+#include <cerrno>
+#include <fcntl.h>
 #include <memory>
+#include <sys/file.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <utility>
 
 // 注意：BiliNetwork 单例必须在 GUI/qApp 线程首次创建。
 // init_plugin 可能跑在无事件循环的加载线程——那里绝不能 instance()。
 
 namespace {
+
+const char *const kApiGeneration = "biliApiGeneration";
+const char *const kApiRequestSerial = "biliApiRequestSerial";
+const char *const kRequestTimedOut = "biliRequestTimedOut";
+const char *const kRequestCanceled = "biliRequestCanceled";
+
+enum class ProcessLockState { Alive, Stopped, Unknown };
+
+ProcessLockState probeProcessLock(const QString &path) {
+  const QByteArray nativePath = QFile::encodeName(path);
+  const int fd = ::open(nativePath.constData(),
+                        O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
+  if (fd < 0) {
+    qWarning() << "[BiliNet] Cannot open Go process lock:" << path << errno;
+    return ProcessLockState::Unknown;
+  }
+  struct FdGuard {
+    int fd;
+    ~FdGuard() { ::close(fd); }
+  } guard{fd};
+  struct stat info;
+  if (::fstat(fd, &info) != 0 || !S_ISREG(info.st_mode)) {
+    qWarning() << "[BiliNet] Invalid Go process lock:" << path;
+    return ProcessLockState::Unknown;
+  }
+  if (::flock(fd, LOCK_EX | LOCK_NB) == 0) {
+    ::flock(fd, LOCK_UN);
+    return ProcessLockState::Stopped;
+  }
+  if (errno == EWOULDBLOCK || errno == EAGAIN)
+    return ProcessLockState::Alive;
+  qWarning() << "[BiliNet] Cannot inspect Go process lock:" << path << errno;
+  return ProcessLockState::Unknown;
+}
+
+bool isTransportFailure(QNetworkReply *reply) {
+  const auto error = reply->error();
+  if (reply->property(kRequestCanceled).toBool())
+    return false;
+  if (error == QNetworkReply::OperationCanceledError)
+    return reply->property(kRequestTimedOut).toBool();
+  // 1..99 是网络传输错误；HTTP 内容、认证与服务端错误保留原处理。
+  return error > QNetworkReply::NoError &&
+         error <= QNetworkReply::UnknownNetworkError;
+}
 
 // API 响应解析结果（可在任意线程产出，主线程消费）
 struct ApiParseResult {
@@ -133,7 +183,9 @@ BiliNetwork *BiliNetwork::instance() {
 
 BiliNetwork::BiliNetwork(QObject *parent)
     : QObject(parent), m_nam(new QNetworkAccessManager(this)),
-      m_apiBase("http://127.0.0.1:8000"), m_requestTimeout(10000) {
+      m_apiBase("http://127.0.0.1:8000"),
+      m_apiServerLockPath("/tmp/bilipocket-server-8000.lock"),
+      m_requestTimeout(10000) {
   m_nam->setTransferTimeout(m_requestTimeout);
   // JSON 解析线程池：适当提高并发，避免多个列表响应排队过久
   m_jsonPool.setMaxThreadCount(4);
@@ -157,12 +209,101 @@ void BiliNetwork::cancelVideoDownload() {
   for (const QPointer<QNetworkReply> &reply : repliesToAbort) {
     if (reply) {
       qDebug() << "[BiliNetwork] Aborting download/merge request...";
+      reply->setProperty(kRequestCanceled, true);
       reply->abort();
     }
   }
 }
 
 QString BiliNetwork::apiBase() const { return m_apiBase; }
+
+bool BiliNetwork::isApiUrl(const QUrl &url) const {
+  const QUrl base(m_apiBase);
+  return url.scheme() == base.scheme() && url.host() == base.host() &&
+         url.port(80) == base.port(80);
+}
+
+void BiliNetwork::prepareApiRequest(QNetworkReply *reply) {
+  if (reply && isApiUrl(reply->request().url()))
+    reply->setProperty(kApiGeneration, QVariant::fromValue(m_apiGeneration));
+}
+
+bool BiliNetwork::isCurrentApiReply(QNetworkReply *reply) const {
+  return reply && isApiUrl(reply->request().url()) && isApiUrl(reply->url()) &&
+         reply->property(kApiGeneration).isValid() &&
+         reply->property(kApiGeneration).toULongLong() == m_apiGeneration;
+}
+
+void BiliNetwork::clearApiServerFailure() {
+  if (!m_apiServerExitReported)
+    return;
+  m_apiServerExitReported = false;
+  emit apiServerRecovered();
+}
+
+void BiliNetwork::observeApiReply(QNetworkReply *reply) {
+  if (!m_apiServerReady || m_apiServerRestarting || !isCurrentApiReply(reply) ||
+      reply->property(kRequestCanceled).toBool())
+    return;
+  // 收到完整 HTTP 响应就说明服务已恢复；业务错误不等于进程退出。
+  if (!isTransportFailure(reply) &&
+      reply->error() != QNetworkReply::OperationCanceledError &&
+      reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).isValid())
+    clearApiServerFailure();
+}
+
+bool BiliNetwork::checkApiServerFailure(QNetworkReply *reply, int &code,
+                                       QString &message) {
+  if (!m_apiServerReady || m_apiServerRestarting || m_cancelingAll ||
+      !isCurrentApiReply(reply) || !isTransportFailure(reply))
+    return false;
+
+  const ProcessLockState state = probeProcessLock(m_apiServerLockPath);
+  if (state == ProcessLockState::Alive) {
+    clearApiServerFailure();
+    return false;
+  }
+  if (state != ProcessLockState::Stopped)
+    return false;
+
+  code = ApiServerExitedError;
+  message = QStringLiteral("Go 进程已结束");
+  if (!m_apiServerExitReported) {
+    m_apiServerExitReported = true;
+    emit apiServerExited();
+  }
+  return true;
+}
+
+bool BiliNetwork::beginApiServerRestart() {
+  if (m_apiServerRestarting)
+    return false;
+  m_apiServerRestarting = true;
+  ++m_apiGeneration;
+  m_apiServerExitReported = false;
+  emit apiServerRecovered();
+  setApiServerReady(false);
+  return true;
+}
+
+void BiliNetwork::finishApiServerRestart(bool ok) {
+  if (!m_apiServerRestarting)
+    return;
+  m_apiServerRestarting = false;
+  m_apiServerExitReported = !ok;
+  if (ok)
+    emit apiServerRecovered();
+  else
+    emit apiServerRestartFailed();
+  setApiServerReady(true);
+}
+
+void BiliNetwork::resetApiServerState() {
+  ++m_apiGeneration;
+  m_apiServerRestarting = false;
+  m_apiServerExitReported = false;
+  emit apiServerRecovered();
+}
 
 void BiliNetwork::applyCommonHeaders(QNetworkRequest &request) {
   // 使用正常浏览器 UA，避免风控
@@ -194,6 +335,7 @@ bool BiliNetwork::checkRateLimit() {
 }
 
 void BiliNetwork::trackReply(QNetworkReply *reply) {
+  prepareApiRequest(reply);
   {
     QMutexLocker locker(&m_replyMutex);
     m_activeReplies.insert(reply);
@@ -265,6 +407,8 @@ void BiliNetwork::cancelAllRequests() {
 
   for (QNetworkReply *reply : replies) {
     if (reply && reply->isRunning()) {
+      reply->setProperty(kRequestCanceled, true);
+      reply->setProperty("biliSilentCancel", true);
       reply->abort();
     }
   }
@@ -358,8 +502,9 @@ void BiliNetwork::get(const QString &path, const QMap<QString, QString> &params,
   QTimer *timer = new QTimer(this);
   timer->setSingleShot(true);
 
-  connect(timer, &QTimer::timeout, this, [safeReply, timer, onError]() {
+  connect(timer, &QTimer::timeout, this, [safeReply, timer]() {
     if (safeReply && safeReply->isRunning()) {
+      safeReply->setProperty(kRequestTimedOut, true);
       safeReply->abort();
       qWarning() << "[BiliNet] Request timeout!";
       // 不在这里调用 onError，让 finished 处理
@@ -421,6 +566,7 @@ void BiliNetwork::downloadImage(const QUrl &url, RawCallback onSuccess,
   timer->setSingleShot(true);
   connect(timer, &QTimer::timeout, this, [safeReply, timer]() {
     if (safeReply && safeReply->isRunning()) {
+      safeReply->setProperty(kRequestTimedOut, true);
       safeReply->abort();
     }
     timer->disconnect();
@@ -541,6 +687,7 @@ void BiliNetwork::downloadVideo(const QString &url, const QString &targetPath,
   timer->setSingleShot(true);
   connect(timer, &QTimer::timeout, this, [safeReply, timer]() {
     if (safeReply && safeReply->isRunning()) {
+      safeReply->setProperty(kRequestTimedOut, true);
       safeReply->abort();
     }
     timer->disconnect();
@@ -556,6 +703,7 @@ void BiliNetwork::downloadVideo(const QString &url, const QString &targetPath,
             timer->disconnect();
             timer->deleteLater();
             untrackReply(reply);
+            observeApiReply(reply);
 
             // 确保在 finished 信号处理结束时，清理对 reply 的跟踪
             {
@@ -600,11 +748,18 @@ void BiliNetwork::downloadVideo(const QString &url, const QString &targetPath,
                   onError(-16, "写入文件失败（磁盘空间可能不足）");
                 }
               } else {
-                qWarning() << "[BiliNet] Download failed:"
-                           << reply->errorString();
-                if (onError) {
-                  onError(reply->error(), reply->errorString());
+                int code = reply->error();
+                QString message = reply->errorString();
+                if (code == QNetworkReply::OperationCanceledError &&
+                    reply->property(kRequestTimedOut).toBool() &&
+                    !reply->property(kRequestCanceled).toBool()) {
+                  code = QNetworkReply::TimeoutError;
+                  message = QStringLiteral("网络请求超时");
                 }
+                checkApiServerFailure(reply, code, message);
+                qWarning() << "[BiliNet] Download failed:" << message;
+                if (onError)
+                  onError(code, message);
               }
             }
             reply->deleteLater();
@@ -629,12 +784,23 @@ void BiliNetwork::handleReply(QNetworkReply *reply, SuccessCallback onSuccess,
     }
   } guard{reply};
 
+  observeApiReply(reply);
+
   // 网络层错误
   if (reply->error() != QNetworkReply::NoError) {
+    // 主动取消和超时都可能表现为 abort，保留二者的真实原因。
+    if (reply->property("biliSilentCancel").toBool() ||
+        (m_cancelingAll && reply->error() == QNetworkReply::OperationCanceledError))
+      return;
+
     QString errorMsg;
     int errorCode = reply->error();
+    if (reply->error() == QNetworkReply::OperationCanceledError &&
+        reply->property(kRequestTimedOut).toBool() &&
+        !reply->property(kRequestCanceled).toBool())
+      errorCode = QNetworkReply::TimeoutError;
 
-    switch (reply->error()) {
+    switch (errorCode) {
     case QNetworkReply::OperationCanceledError:
       errorMsg = "请求已取消";
       break;
@@ -655,27 +821,16 @@ void BiliNetwork::handleReply(QNetworkReply *reply, SuccessCallback onSuccess,
       break;
     }
 
+    const bool serverExited = checkApiServerFailure(reply, errorCode, errorMsg);
     qWarning() << "[BiliNet] Error:" << errorCode << errorMsg;
-
-    // cancelAll 已重置状态，其引发的取消静默跳过 onError
-    if (reply->error() == QNetworkReply::OperationCanceledError) {
-      bool silent = false;
-      {
-        QMutexLocker locker(&m_replyMutex);
-        silent = m_cancelingAll;
-      }
-      if (silent)
-        return;
-    }
-
-    if (onError) {
+    if (onError)
       onError(errorCode, errorMsg);
-    }
-    // 用户主动取消/超时不再上抛全局错误，避免 UI 卡死或弹出误导错误
-    if (reply->error() != QNetworkReply::OperationCanceledError &&
-        reply->error() != QNetworkReply::TimeoutError) {
+    // Go 故障由单独通知显示，旧请求与重启期间的失败不能覆盖新状态。
+    if (!serverExited && !m_apiServerExitReported && m_apiServerReady &&
+        !m_apiServerRestarting && isCurrentApiReply(reply) &&
+        errorCode != QNetworkReply::OperationCanceledError &&
+        errorCode != QNetworkReply::TimeoutError)
       emit networkError(errorMsg);
-    }
     return;
   }
 

@@ -32,6 +32,27 @@ Rectangle {
     readonly property bool popularImagesActive: visible && tabIndex === 0
     readonly property bool profileImagesActive: visible && tabIndex === 3
 
+    // 加载指示延迟显示：数据快速返回时不闪占位卡片/加载框
+    property bool skeletonVisible: false
+    readonly property bool skeletonPending: initialPopularRequested && popularList.count === 0 && isLoading
+    onSkeletonPendingChanged: {
+        if (skeletonPending) {
+            skeletonDelayTimer.restart()
+        } else {
+            skeletonDelayTimer.stop()
+            skeletonVisible = false
+        }
+    }
+    property bool loadingPillVisible: false
+    onIsLoadingChanged: {
+        if (isLoading) {
+            loadingPillDelayTimer.restart()
+        } else {
+            loadingPillDelayTimer.stop()
+            loadingPillVisible = false
+        }
+    }
+
     function requestInitialPopular() {
         if (!controller || initialPopularRequested) return
         var model = controller.feed.popularModel()
@@ -50,6 +71,20 @@ Rectangle {
         interval: 50
         repeat: false
         onTriggered: homePage.requestInitialPopular()
+    }
+
+    Timer {
+        id: skeletonDelayTimer
+        interval: 350
+        repeat: false
+        onTriggered: if (homePage.skeletonPending) homePage.skeletonVisible = true
+    }
+
+    Timer {
+        id: loadingPillDelayTimer
+        interval: 350
+        repeat: false
+        onTriggered: if (homePage.isLoading) homePage.loadingPillVisible = true
     }
 
     function switchTab(index) {
@@ -143,7 +178,7 @@ Rectangle {
                 onLoadMoreRequested: if (controller) controller.feed.fetchMorePopular()
 
                 Row {
-                    visible: initialPopularRequested && popularList.count === 0 && isLoading
+                    visible: homePage.skeletonVisible
                     anchors.left: parent.left
                     anchors.leftMargin: 2
                     anchors.verticalCenter: parent.verticalCenter
@@ -500,7 +535,7 @@ Rectangle {
 
     // ── 加载指示器 ──
     Rectangle {
-        visible: isLoading
+        visible: homePage.loadingPillVisible
         anchors.centerIn: contentArea
         width: loadingRow.width + 16
         height: Theme.s * 22

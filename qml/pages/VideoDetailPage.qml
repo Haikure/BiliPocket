@@ -1229,7 +1229,7 @@ Rectangle {
                 color: surfaceColor
                 border.color: surfaceBorder
                 border.width: 1
-                height: detailPage.detailContentReady ? descColumn.implicitHeight + 18 : 48
+                height: detailPage.detailContentReady ? descColumn.implicitHeight + Theme.s * 18 : Theme.s * 48
 
                 Canvas {
                     visible: !detailPage.detailContentReady
@@ -1347,7 +1347,29 @@ Rectangle {
                         Text {
                             id: descText
                             width: parent.width
-                            text: RichText.linkifyVideoLinks(controller ? controller.videoDesc : "", "暂无简介")
+                            // 简介正文，末尾追加 #标签 行；标签未返回或为空时仅显示简介
+                            text: {
+                                var tags = controller ? controller.videoTagNames : []
+                                var tagLine = ""
+                                if (tags && tags.length > 0) {
+                                    var parts = []
+                                    for (var i = 0; i < tags.length; i++) {
+                                        var name = String(tags[i] || "").trim()
+                                        if (name.length > 0) parts.push("#" + name)
+                                    }
+                                    if (parts.length > 0) {
+                                        tagLine = "<font color=\"" + Theme.detailAccentLight + "\">"
+                                                  + RichText.escapeRichText(parts.join(" ")) + "</font>"
+                                    }
+                                }
+                                var desc = RichText.linkifyVideoLinks(
+                                    controller ? controller.videoDesc : "",
+                                    tagLine ? "" : "暂无简介")
+                                if (!tagLine) return desc
+                                // 去掉正文结尾多余的换行，避免标签行前出现空行
+                                desc = desc.replace(/(?:<br>)+$/g, "")
+                                return desc ? desc + "<br>" + tagLine : tagLine
+                            }
                             textFormat: Text.RichText
                             color: "#94a3b8"
                             font.family: Theme.fontFamily

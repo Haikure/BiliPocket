@@ -114,6 +114,23 @@ func handleVideoInfo(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func handleVideoTags(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	aid, ok := getIntQuery(w, q, "aid", 1, 0, true)
+	if !ok {
+		return
+	}
+	bvid := q.Get("bvid")
+	if aid == 0 && bvid == "" {
+		logWarn("aid 和 bvid 都未提供")
+		writeError(w, 400, "aid 或 bvid 至少提供一个")
+		return
+	}
+	handleAPI(w, "/video/tags", func(c *BilibiliClient) (json.RawMessage, error) {
+		return c.GetVideoTags(r.Context(), aid, bvid)
+	})
+}
+
 func handleVideoRelated(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	aid, ok := getIntQuery(w, q, "aid", 1, 0, true)

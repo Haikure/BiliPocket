@@ -522,8 +522,15 @@ QQuickTextureFactory *BiliImageResponse::textureFactory() const {
 
 // ========== BiliImageProvider 实现 ==========
 
+// 解码后的图片内存缓存为进程级共享：插件页每次打开都会重建 provider 实例，
+// 若缓存随实例销毁，重开时所有封面都要重新解码并逐个淡入（首页卡片闪烁）。
+namespace {
+QReadWriteLock g_imageCacheLock;
+QCache<QString, QImage> g_imageCache(BiliImageProvider::MAX_CACHE_COST);
+} // namespace
+
 BiliImageProvider::BiliImageProvider(BiliNetwork *network)
-    : QQuickAsyncImageProvider(), m_network(network), m_cache(MAX_CACHE_COST) {
+    : QQuickAsyncImageProvider(), m_network(network) {
   m_threadPool.setMaxThreadCount(MAX_CONCURRENT);
   // 延长空闲线程存活，避免滚动间隙丢掉每线程 NAM 的 keep-alive 连接
   m_threadPool.setExpiryTimeout(60 * 1000);
@@ -537,9 +544,7 @@ BiliImageProvider::~BiliImageProvider() {
   m_threadPool.clear();           // 移除未开始的任务
   m_threadPool.waitForDone(5000); // 等待已运行任务完成
 
-  // 清理缓存
-  QWriteLocker locker(&m_cacheLock);
-  m_cache.clear();
+  // 共享内存缓存跨插件开合保留，这里不再清空
 
   IMG_DEBUG << "Destroyed";
 }
@@ -548,7 +553,7 @@ QQuickImageResponse *
 BiliImageProvider::requestImageResponse(const QString &id,
                                         const QSize &requestedSize) {
   auto *response =
-      new BiliImageResponse(id, requestedSize, &m_cache, &m_cacheLock);
+      new BiliImageResponse(id, requestedSize, &g_imageCache, &g_imageCacheLock);
 
   m_threadPool.start(response);
 

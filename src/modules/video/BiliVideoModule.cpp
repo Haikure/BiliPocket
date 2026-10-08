@@ -356,6 +356,50 @@ void BiliVideoModule::scheduleVideoDetailPreload(const QString &bvid, qint64 aid
   });
 }
 
+// 拉取当前视频 TAG（新接口 view/detail/tag），成功后更新 videoTagNames。
+// 响应仅在仍属于当前视频时应用，避免快速切换视频后旧数据覆盖。
+void BiliVideoModule::fetchVideoTags(const QString &bvid, qint64 aid) {
+  if (!m_controller || bvid.isEmpty())
+    return;
+
+  // 切换视频时先清空旧标签，避免上一视频的标签短暂残留
+  if (m_controller->m_videoTagsBvid != bvid) {
+    m_controller->m_videoTagsBvid = bvid;
+    if (!m_controller->m_videoTagNames.isEmpty()) {
+      m_controller->m_videoTagNames.clear();
+      emit m_controller->videoTagsChanged();
+    }
+  }
+
+  QMap<QString, QString> params;
+  if (aid > 0)
+    params["aid"] = QString::number(aid);
+  params["bvid"] = bvid;
+
+  QPointer<BiliController> self(m_controller);
+  m_controller->m_network->get(
+      "/video/tags", params,
+      [self, bvid](const QJsonObject &data) {
+        if (!self || self->m_currentVideo.bvid != bvid)
+          return;
+        QStringList names;
+        const QJsonArray tags = data.value("list").toArray();
+        names.reserve(tags.size());
+        for (const QJsonValue &v : tags) {
+          const QJsonObject tag = v.toObject();
+          // bgm 是背景音乐而非话题标签，不计入简介末尾的 #标签
+          if (tag.value("tag_type").toString() == QLatin1String("bgm"))
+            continue;
+          const QString name = tag.value("tag_name").toString().trimmed();
+          if (!name.isEmpty())
+            names.append(name);
+        }
+        self->m_videoTagNames = names;
+        emit self->videoTagsChanged();
+      },
+      [](int, const QString &) {});
+}
+
 void BiliVideoModule::captureCurrentVideoDetail() {
   if (!m_controller)
     return;
@@ -443,6 +487,8 @@ bool BiliVideoModule::restoreCachedVideoDetail(const QString &bvid) {
   emit m_controller->videoDetailChanged();
   emit m_controller->videoStatsChanged();
   emit m_controller->playbackProgressChanged();
+  fetchVideoTags(m_controller->m_currentVideo.bvid,
+                 m_controller->m_currentVideo.aid);
   scheduleVideoDetailPreload(m_controller->m_currentVideo.bvid,
                              m_controller->m_currentVideo.aid,
                              m_controller->m_currentVideo.cid);
@@ -493,12 +539,15 @@ void BiliVideoModule::dropCachedVideoDetail(const QString &bvid) {
   m_controller->setCoinState(false);
   m_controller->setLikeState(false);
   m_controller->setWatchLaterState(false);
+  m_controller->m_videoTagNames.clear();
+  m_controller->m_videoTagsBvid.clear();
   m_controller->clearAcceptQualities();
   m_controller->clearSubtitleItems();
   m_controller->clearSelectedSubtitle();
 
   emit m_controller->videoDetailChanged();
   emit m_controller->videoStatsChanged();
+  emit m_controller->videoTagsChanged();
   emit m_controller->playbackProgressChanged();
 }
 
@@ -814,6 +863,10 @@ void BiliVideoModule::fetchVideoDetail(const QString &bvid) {
         emit self->videoStatsChanged();
         emit self->playbackProgressChanged();
         self->setIsLoading(false);
+        if (self->m_videoModule) {
+          self->m_videoModule->fetchVideoTags(requestedBvid,
+                                              self->m_currentVideo.aid);
+        }
         if (self->m_videoModule) {
           self->m_videoModule->scheduleVideoDetailPreload(
               self->m_currentVideo.bvid, self->m_currentVideo.aid,

@@ -115,6 +115,33 @@ func (c *BilibiliClient) GetVideoRelated(ctx context.Context, aid int, bvid stri
 	return raw, nil
 }
 
+func (c *BilibiliClient) GetVideoTags(ctx context.Context, aid int, bvid string) (json.RawMessage, error) {
+	logInfo("获取视频TAG aid=%d bvid=%s", aid, bvid)
+	params := map[string]string{}
+	if aid > 0 {
+		params["aid"] = strconv.Itoa(aid)
+	}
+	if bvid != "" {
+		params["bvid"] = bvid
+	}
+	raw, err := c.request(ctx, "https://api.bilibili.com/x/web-interface/view/detail/tag", params, "GET")
+	if err != nil {
+		return nil, err
+	}
+
+	// 上游 data 为数组，C++ 侧统一按对象解析，这里包一层 {"list": [...]}
+	var resp map[string]interface{}
+	if err := json.Unmarshal(raw, &resp); err == nil {
+		if arr, ok := resp["data"].([]interface{}); ok {
+			resp["data"] = map[string]interface{}{"list": arr}
+			if merged, mErr := json.Marshal(resp); mErr == nil {
+				return merged, nil
+			}
+		}
+	}
+	return raw, nil
+}
+
 func (c *BilibiliClient) GetVideoComments(ctx context.Context, oid, typ, sortVal, ps, pn int) (json.RawMessage, error) {
 	logInfo("获取评论 oid=%d type=%d sort=%d", oid, typ, sortVal)
 	return c.request(ctx, "https://api.bilibili.com/x/v2/reply", map[string]string{

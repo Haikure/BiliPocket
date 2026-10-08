@@ -26,6 +26,7 @@ signals:
 
 private:
   void scheduleVideoDetailPreload(const QString &bvid, qint64 aid, qint64 cid);
+  void fetchVideoTags(const QString &bvid, qint64 aid);
   void resolveShortVideoLink(const QUrl &url, bool useGet);
 
   BiliController *m_controller;

@@ -85,6 +85,7 @@ class BiliController : public QObject {
   Q_PROPERTY(QString videoSeasonCover READ videoSeasonCover NOTIFY videoDetailChanged)
   Q_PROPERTY(qint64 videoSeasonMid READ videoSeasonMid NOTIFY videoDetailChanged)
   Q_PROPERTY(int videoSeasonTotal READ videoSeasonTotal NOTIFY videoDetailChanged)
+  Q_PROPERTY(QStringList videoTagNames READ videoTagNames NOTIFY videoTagsChanged)
 
   // 播放地址
   Q_PROPERTY(QString playUrl READ playUrl NOTIFY playUrlChanged)
@@ -113,6 +114,7 @@ class BiliController : public QObject {
   Q_PROPERTY(bool videoDetailPreloadEnabled READ videoDetailPreloadEnabled NOTIFY preferenceSettingsChanged)
   Q_PROPERTY(bool defaultSubtitleEnabled READ defaultSubtitleEnabled NOTIFY preferenceSettingsChanged)
   Q_PROPERTY(bool preferMp4Stream READ preferMp4Stream NOTIFY preferenceSettingsChanged)
+  Q_PROPERTY(bool useEmbeddedPlayer READ useEmbeddedPlayer NOTIFY preferenceSettingsChanged)
 
   // 登录状态
   Q_PROPERTY(bool loggedIn READ loggedIn NOTIFY loginStateChanged)
@@ -165,6 +167,7 @@ class BiliController : public QObject {
 
   // 全局错误
   Q_PROPERTY(QString globalError READ globalError NOTIFY globalErrorChanged)
+  Q_PROPERTY(bool goServerRestartRequired READ goServerRestartRequired NOTIFY globalErrorChanged)
   Q_PROPERTY(bool isLoading READ isLoading NOTIFY isLoadingChanged)
 
 public:
@@ -196,6 +199,7 @@ public:
   QString videoSeasonCover() const { return m_videoSeasonCover; }
   qint64 videoSeasonMid() const { return m_videoSeasonMid; }
   int videoSeasonTotal() const { return m_videoSeasonTotal; }
+  QStringList videoTagNames() const { return m_videoTagNames; }
 
   QString playUrl() const;
   int playQuality() const;
@@ -224,6 +228,7 @@ public:
   bool videoDetailPreloadEnabled() const { return m_videoDetailPreloadEnabled; }
   bool defaultSubtitleEnabled() const { return m_defaultSubtitleEnabled; }
   bool preferMp4Stream() const { return m_preferMp4Stream; }
+  bool useEmbeddedPlayer() const { return m_useEmbeddedPlayer; }
 
   bool loggedIn() const;
   qint64 upUserMid() const { return m_upUserMid; }
@@ -269,6 +274,7 @@ public:
 
   int seasonVideoTotal() const { return m_seasonVideoTotal; }
   QString globalError() const;
+  bool goServerRestartRequired() const { return m_goServerRestartRequired; }
   bool isLoading() const;
   QObject *feed() const;
   QObject *comments() const;
@@ -331,6 +337,7 @@ public:
 signals:
   void videoDetailChanged();
   void videoStatsChanged();
+  void videoTagsChanged();
   void playbackProgressChanged();
   void playUrlChanged();
   void acceptQualitiesChanged();
@@ -399,6 +406,9 @@ private:
   QString m_videoSeasonCover;
   qint64 m_videoSeasonMid = 0;
   int m_videoSeasonTotal = 0;
+  // 当前视频的 TAG 名称列表（末尾#标签），按拉取时的 bvid 归属
+  QStringList m_videoTagNames;
+  QString m_videoTagsBvid;
 
   struct VideoDetailSnapshot {
     VideoItem video;
@@ -454,6 +464,7 @@ private:
   bool m_videoDetailPreloadEnabled = false;
   bool m_defaultSubtitleEnabled = false;
   bool m_preferMp4Stream = false;
+  bool m_useEmbeddedPlayer = false;
   bool m_subtitleSelectionOverridden = false;
   QPointer<QNetworkReply> m_downloadReply;
   QPointer<QProcess> m_externalPlayerProcess;
@@ -494,6 +505,7 @@ private:
   bool m_userIsVip;
 
   QString m_globalError;
+  bool m_goServerRestartRequired = false;
   bool m_isLoading;
 
   // 加载计数器（多个异步请求同时进行时正确管理 isLoading）

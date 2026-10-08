@@ -54,14 +54,11 @@ public:
   QQuickImageResponse *
   requestImageResponse(const QString &id, const QSize &requestedSize) override;
 
+  static constexpr int MAX_CACHE_COST = 20 * 1024 * 1024;
+  static constexpr int MAX_CONCURRENT = 8;
+
 private:
   QPointer<BiliNetwork> m_network;
 
-  QReadWriteLock m_cacheLock;
-  QCache<QString, QImage> m_cache;
-
   QThreadPool m_threadPool;
-
-  static constexpr int MAX_CACHE_COST = 20 * 1024 * 1024;
-  static constexpr int MAX_CONCURRENT = 8;
 };
