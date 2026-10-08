@@ -1131,12 +1131,7 @@ void attach_engine(QQmlEngine *engine) {
   s_engine = engine;
 
   if (s_engine) {
-    QString pluginPath = "/userdisk/PenMods/plugins/bili_plugin/qml";
-    engine->addImportPath(pluginPath);
-
-    QString playerPath = "/userdisk/PenMods/plugins/bili_plugin/";
-    engine->addImportPath(playerPath);
-
+    // 页面通过相对路径加载，FFmpegPlayer 使用 PenMods 注册的公共导入路径。
     // 在引擎/GUI 线程首次触及 BiliNetwork，保证 QNAM 线程亲和正确
     BiliNetwork *network = BiliNetwork::instance();
     network->resetApiServerState();

@@ -159,7 +159,7 @@ Rectangle {
             asynchronous: true
             opacity: 1
             visible: controller && controller.videoPic && controller.videoPic.length > 0
-                     && !embeddedPlayer && !playbackStarted
+                     && !embeddedPlayer
         }
 
         Loader {
