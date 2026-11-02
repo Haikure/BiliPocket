@@ -1,6 +1,8 @@
 import QtQuick 2.15
 import QtQuick.Window 2.15
-import FFmpegPlayer 1.0
+import FFmpegPlayer 1.0 as FFmpegPlayer
+import "qrc:/qml/commons"
+import "qrc:/qml/audiopages"
 
 // Adapted from ffmpeg_mod/examples/Player.qml (2026-10-07).
 // Window lifecycle is supplied by PlayerPage; controls and gestures follow upstream.
@@ -36,13 +38,25 @@ Rectangle {
     property bool osdVisible: true
     property bool hideOsdAfterPlaybackStarts: false
     readonly property bool controlPressed: gestureArea.pressed || seekMouseArea.pressed || resetZoomButton.pressed ||
-            zoomInButton.pressed || zoomOutButton.pressed || closeButton.pressed ||
-            backwardButton.pressed || playButton.pressed || forwardButton.pressed ||
-            speedButton.pressed || subtitleButton.pressed
+            zoomInButton.pressed || zoomOutButton.pressed || closeButton.backButtonItem.backButtonMouseAreaItem.pressed ||
+            backwardButton.pressed || playButton.pressed || forwardButton.pressed
 
-    readonly property bool playing: player.playbackState === VideoPlayer.PlayingState
-    readonly property bool paused: player.playbackState === VideoPlayer.PausedState
+    readonly property bool playing: player.playbackState === FFmpegPlayer.VideoPlayer.PlayingState
+    readonly property bool paused: player.playbackState === FFmpegPlayer.VideoPlayer.PausedState
     readonly property bool loading: player.loading || player.seeking
+    readonly property bool connecting: player.loading
+    readonly property bool seeking: player.seeking
+    // Optional properties are read individually so older host modules still load.
+    readonly property bool buffering: typeof player.buffering === "boolean" && player.buffering
+    readonly property real bufferProgress: typeof player.bufferProgress === "number" && isFinite(player.bufferProgress)
+            ? Math.max(0, Math.min(1, player.bufferProgress)) : -1
+    readonly property real downloadSpeed: typeof player.downloadSpeed === "number" && isFinite(player.downloadSpeed)
+            && player.downloadSpeed >= 0 ? player.downloadSpeed : -1
+    readonly property real bufferedPosition: typeof player.bufferedPosition === "number" && isFinite(player.bufferedPosition)
+            && player.bufferedPosition >= 0 ? player.bufferedPosition : -1
+    property bool preparingPlayback: false
+    readonly property bool waiting: preparingPlayback || (sessionActive && (loading || buffering))
+    readonly property real controlsHeight: controls.visible && osdVisible ? controls.height : 0
     readonly property real position: player.position
     readonly property real duration: player.duration
     property bool hasSubtitle: false
@@ -113,13 +127,14 @@ Rectangle {
         else
             Qt.callLater(restartOsdTimer)
     }
+    onWaitingChanged: restartOsdTimer()
     onVisibleChanged: if (!visible) stopAndReport()
     Component.onDestruction: stopAndReport()
 
     function restartOsdTimer() {
         osdHideTimer.stop()
-        if (osdVisible && !zoomMode && !controlPressed &&
-                player.playbackState === VideoPlayer.PlayingState)
+        if (osdVisible && !zoomMode && !controlPressed && !waiting &&
+                player.playbackState === FFmpegPlayer.VideoPlayer.PlayingState)
             osdHideTimer.start()
     }
 
@@ -133,11 +148,11 @@ Rectangle {
         osdHideTimer.stop()
         hideOsdAfterPlaybackStarts = false
         osdVisible = true
-        if (player.playbackState === VideoPlayer.PlayingState)
+        if (player.playbackState === FFmpegPlayer.VideoPlayer.PlayingState)
             restartOsdTimer()
         else
             hideOsdAfterPlaybackStarts = initiatedPlayback &&
-                    player.playbackState === VideoPlayer.LoadingState
+                    player.playbackState === FFmpegPlayer.VideoPlayer.LoadingState
     }
 
     function zoomIn() {
@@ -189,12 +204,14 @@ Rectangle {
         anchors.fill: parent
         clip: true
 
-        VideoPlayer {
+        FFmpegPlayer.VideoPlayer {
             id: player
             objectName: "embeddedVideoPlayer"
             subtitleSource: app.subtitleUrl
             subtitleFontFile: app.subtitleFontUrl
-            progressBarEnabled: app.edgeProgressEnabled && !app.zoomMode
+            // The edge bar is drawn by app.edgeProgressOverlay so it can show
+            // the buffered range independently from the played range.
+            progressBarEnabled: false
             progressBarPosition: app.previewSeeking ? app.seekPreviewPosition : -1
             anchors.fill: parent
             scale: Math.pow(2, app.zoomLevel)
@@ -206,21 +223,21 @@ Rectangle {
                 app.setOsdVisible(true)
             }
             onPlaybackStateChanged: {
-                if (app.resumePending && playbackState === VideoPlayer.PlayingState) {
+                if (app.resumePending && playbackState === FFmpegPlayer.VideoPlayer.PlayingState) {
                     app.resumePending = false
                     if (duration <= 0 || app.resumePosition < duration)
                         seek(app.resumePosition)
                 }
-                if (playbackState === VideoPlayer.PausedState)
+                if (playbackState === FFmpegPlayer.VideoPlayer.PausedState)
                     app.reportProgress(false)
 
-                if (player.loading || player.playbackState === VideoPlayer.StoppedState ||
-                        (player.playbackState !== VideoPlayer.PlayingState && player.boosted))
+                if (player.loading || player.playbackState === FFmpegPlayer.VideoPlayer.StoppedState ||
+                        (player.playbackState !== FFmpegPlayer.VideoPlayer.PlayingState && player.boosted))
                     gestureArea.cancelGesture()
-                if (app.hideOsdAfterPlaybackStarts && player.playbackState === VideoPlayer.PlayingState) {
+                if (app.hideOsdAfterPlaybackStarts && player.playbackState === FFmpegPlayer.VideoPlayer.PlayingState) {
                     app.hideOsdAfterPlaybackStarts = false
                     app.restartOsdTimer()
-                } else if (app.hideOsdAfterPlaybackStarts && player.playbackState === VideoPlayer.StoppedState) {
+                } else if (app.hideOsdAfterPlaybackStarts && player.playbackState === FFmpegPlayer.VideoPlayer.StoppedState) {
                     app.hideOsdAfterPlaybackStarts = false
                 }
             }
@@ -248,6 +265,47 @@ Rectangle {
             visible: app.showCover
             fillMode: Image.PreserveAspectCrop
             asynchronous: true
+        }
+
+        Item {
+            id: edgeProgressOverlay
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            height: Math.max(0, app.edgeProgressHeight)
+            visible: app.edgeProgressEnabled && !app.zoomMode && app.sessionActive &&
+                     app.duration > 0 && (app.playing || app.paused) && height > 0
+            z: 1
+
+            Rectangle {
+                anchors.fill: parent
+                color: app.edgeProgressBackgroundColor
+            }
+
+            Rectangle {
+                id: edgeBufferedProgress
+                anchors.verticalCenter: parent.verticalCenter
+                readonly property real startFraction: app.sessionActive && player.duration > 0 &&
+                        isFinite(player.duration) && isFinite(player.position)
+                        ? Math.max(0, Math.min(1, player.position / player.duration)) : 0
+                readonly property real endFraction: app.bufferedPosition >= 0 && player.duration > 0 &&
+                        isFinite(player.duration)
+                        ? Math.max(startFraction, Math.min(1, app.bufferedPosition / player.duration)) : startFraction
+                x: parent.width * startFraction
+                width: parent.width * (endFraction - startFraction)
+                height: parent.height
+                color: "#8d969f"
+            }
+
+            Rectangle {
+                anchors.left: parent.left
+                anchors.verticalCenter: parent.verticalCenter
+                width: player.duration > 0
+                       ? parent.width * Math.max(0, Math.min(1, app.displayedPosition / player.duration))
+                       : 0
+                height: parent.height
+                color: app.edgeProgressColor
+            }
         }
 
         MouseArea {
@@ -303,8 +361,8 @@ Rectangle {
                     }
                     if (dragMode === 0) {
                         if (dx > dy * 1.25 && player.duration > 0 &&
-                                (player.playbackState === VideoPlayer.PlayingState ||
-                                 player.playbackState === VideoPlayer.PausedState))
+                                (player.playbackState === FFmpegPlayer.VideoPlayer.PlayingState ||
+                                 player.playbackState === FFmpegPlayer.VideoPlayer.PausedState))
                             dragMode = 1
                         else if (dy > dx * 1.25)
                             dragMode = 2
@@ -315,7 +373,7 @@ Rectangle {
             }
             onPressAndHold: {
                 if (app.holdToBoost && gestureValid && !moved &&
-                        player.playbackState === VideoPlayer.PlayingState) {
+                        player.playbackState === FFmpegPlayer.VideoPlayer.PlayingState) {
                     held = true
                     player.beginBoost()
                 }
@@ -359,8 +417,8 @@ Rectangle {
         interval: 2000
         repeat: false
         onTriggered: {
-            if (!app.zoomMode && !app.controlPressed &&
-                    player.playbackState === VideoPlayer.PlayingState)
+            if (!app.zoomMode && !app.controlPressed && !app.waiting &&
+                    player.playbackState === FFmpegPlayer.VideoPlayer.PlayingState)
                 app.osdVisible = false
         }
     }
@@ -400,10 +458,9 @@ Rectangle {
         anchors.top: parent.top
         anchors.leftMargin: 12
         anchors.topMargin: 6
-        visible: app.swipeSeeking || player.boosted
-        text: app.swipeSeeking
-                ? app.formatTime(app.seekPreviewPosition) + "/" + app.formatTime(player.duration)
-                : Number(player.playbackRate).toString() + "×"
+        // 保留 BiliPocket 当前的长按倍速提示样式。
+        visible: player.boosted
+        text: Number(player.playbackRate).toString() + "×"
         z: 4
         color: "white"
         font.pixelSize: Math.max(12, Math.min(16, 14 * app.uiScale))
@@ -411,10 +468,31 @@ Rectangle {
         styleColor: "#aa000000"
     }
 
-    Text {
+    Rectangle {
+        id: seekPreviewPill
+        anchors.top: parent.top
+        anchors.topMargin: 8
+        anchors.horizontalCenter: parent.horizontalCenter
+        visible: app.swipeSeeking
+        width: seekPreviewText.implicitWidth + 18
+        height: 24
+        radius: 12
+        color: YColors.black
+        opacity: 0.75
+        z: 4
+
+        YText {
+            id: seekPreviewText
+            anchors.centerIn: parent
+            font.pixelSize: 14
+            text: app.formatTime(app.seekPreviewPosition) + " / " + app.formatTime(player.duration)
+        }
+    }
+
+    Rectangle {
         id: errorLabel
         objectName: "errorLabel"
-        text: {
+        property string message: {
             var messages = []
             if (!player.loading && player.errorString.length)
                 messages.push(player.errorString)
@@ -422,27 +500,40 @@ Rectangle {
                 messages.push("字幕：" + player.subtitleErrorString)
             return messages.join("\n")
         }
-        textFormat: Text.PlainText
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.bottom: controls.top
-        anchors.bottomMargin: 10
-        width: parent.width * 0.9
-        visible: text.length > 0
+        anchors.bottomMargin: player.boosted ? 38 : 10
+        width: Math.min(parent.width - 80, errorText.implicitWidth + 18)
+        height: Math.max(24, errorText.implicitHeight + 8)
+        visible: message.length > 0
         z: 4
-        color: "#ffd2d2"
-        wrapMode: Text.Wrap
-        horizontalAlignment: Text.AlignHCenter
-        font.pixelSize: 13
-        style: Text.Outline
-        styleColor: "#dd000000"
+        radius: 12
+        color: YColors.grayNormal
+        opacity: 0.85
+
+        YText {
+            id: errorText
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.leftMargin: 9
+            anchors.rightMargin: 9
+            anchors.verticalCenter: parent.verticalCenter
+            text: errorLabel.message
+            textFormat: Text.PlainText
+            color: YColors.white
+            wrapMode: Text.Wrap
+            horizontalAlignment: Text.AlignHCenter
+            font.pixelSize: 13
+        }
     }
 
     Column {
-        anchors.left: parent.left
+        id: zoomControls
+        anchors.right: parent.right
         anchors.top: parent.top
-        anchors.leftMargin: 16 * app.uiScale
-        anchors.topMargin: Math.max(25 * app.uiScale, gestureIndicator.y + gestureIndicator.height + 8)
-        spacing: 10 * app.uiScale
+        anchors.rightMargin: 16
+        anchors.topMargin: 10
+        spacing: 8
         z: 3
         opacity: app.osdVisible ? 1 : 0
         enabled: app.osdVisible
@@ -451,42 +542,38 @@ Rectangle {
         PlayerButton {
             id: resetZoomButton
             objectName: "resetZoomButton"
-            width: 21 * app.uiScale
-            height: 21 * app.uiScale
+            width: 28
+            height: 28
             onClicked: app.resetZoom()
             contentItem: Text {
                 text: "↺"
                 color: "#f4f6f8"
-                font.pixelSize: 16 * app.uiScale
+                font.pixelSize: 18
                 horizontalAlignment: Text.AlignHCenter
                 verticalAlignment: Text.AlignVCenter
             }
             background: Rectangle {
                 radius: 5
                 color: resetZoomButton.pressed ? "#dc263548" : "#a6101620"
-                border.width: 1
-                border.color: "#40ffffff"
             }
         }
 
         PlayerButton {
             id: zoomInButton
             objectName: "zoomInButton"
-            width: 21 * app.uiScale
-            height: 21 * app.uiScale
+            width: 28
+            height: 28
             onClicked: app.zoomIn()
             contentItem: Text {
                 text: "+"
                 color: "#f4f6f8"
-                font.pixelSize: 16 * app.uiScale
+                font.pixelSize: 18
                 horizontalAlignment: Text.AlignHCenter
                 verticalAlignment: Text.AlignVCenter
             }
             background: Rectangle {
                 radius: 5
                 color: zoomInButton.pressed ? "#dc263548" : "#a6101620"
-                border.width: 1
-                border.color: "#40ffffff"
             }
         }
 
@@ -494,51 +581,36 @@ Rectangle {
             id: zoomOutButton
             objectName: "zoomOutButton"
             visible: app.zoomMode && app.zoomLevel > 0
-            width: 21 * app.uiScale
-            height: 21 * app.uiScale
+            width: 28
+            height: 28
             onClicked: app.zoomOut()
             contentItem: Text {
                 text: "−"
                 color: "#f4f6f8"
-                font.pixelSize: 16 * app.uiScale
+                font.pixelSize: 18
                 horizontalAlignment: Text.AlignHCenter
                 verticalAlignment: Text.AlignVCenter
             }
             background: Rectangle {
                 radius: 5
                 color: zoomOutButton.pressed ? "#dc263548" : "#a6101620"
-                border.width: 1
-                border.color: "#40ffffff"
             }
         }
     }
 
-    PlayerButton {
-        id: closeButton
-        objectName: "closeButton"
-        anchors.top: parent.top
-        anchors.right: parent.right
-        anchors.topMargin: 10 * app.uiScale
-        anchors.rightMargin: 10 * app.uiScale
-        width: 23 * app.uiScale
-        height: 23 * app.uiScale
+    Item {
+        id: closeOverlay
+        anchors.fill: parent
         z: 3
         opacity: app.osdVisible ? 1 : 0
         enabled: app.osdVisible
+        visible: opacity > 0.01
         Behavior on opacity { NumberAnimation { duration: 250 } }
-        onClicked: { app.stopAndReport(); app.closeRequested() }
-        contentItem: Text {
-            text: "×"
-            color: "#e8edf2"
-            font.pixelSize: 17 * app.uiScale
-            horizontalAlignment: Text.AlignHCenter
-            verticalAlignment: Text.AlignVCenter
-        }
-        background: Rectangle {
-            radius: 5
-            color: closeButton.pressed ? "#dc263548" : "#a6101620"
-            border.width: 1
-            border.color: "#40ffffff"
+
+        YVerticalTitleBar {
+            id: closeButton
+            objectName: "closeButton"
+            onCallBack: { app.stopAndReport(); app.closeRequested() }
         }
     }
 
@@ -563,8 +635,8 @@ Rectangle {
         Column {
             id: controlContent
             anchors.fill: parent
-            anchors.leftMargin: Math.max(8, parent.width * 0.025)
-            anchors.rightMargin: Math.max(8, parent.width * 0.025)
+            anchors.leftMargin: 16
+            anchors.rightMargin: 16
             anchors.topMargin: 6
             anchors.bottomMargin: 6
             spacing: 3
@@ -574,13 +646,11 @@ Rectangle {
                 width: parent.width
                 height: app.height < 250 ? 18 : 22
 
-                Text {
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.verticalCenter: parent.verticalCenter
+                YText {
+                    anchors.fill: parent
                     text: app.resolvedTitle()
                     color: "#f4f6f8"
-                    font.pixelSize: Math.max(12, Math.min(16, parent.height * 0.57))
+                    font.pixelSize: Math.max(12, Math.min(16, parent.height * 0.65))
                     elide: Text.ElideRight
                     verticalAlignment: Text.AlignVCenter
                 }
@@ -595,7 +665,7 @@ Rectangle {
                     id: elapsedLabel
                     anchors.left: parent.left
                     anchors.verticalCenter: parent.verticalCenter
-                    width: 36
+                    width: 42
                     text: app.formatTime(app.displayedPosition)
                     color: "#e6eaf0"
                     font.pixelSize: 10
@@ -607,7 +677,7 @@ Rectangle {
                     id: seekTrack
                     anchors.left: elapsedLabel.right
                     anchors.right: remainingLabel.left
-                    anchors.leftMargin: Math.max(12, parent.width * 0.065)
+                    anchors.leftMargin: 12
                     anchors.rightMargin: 12
                     anchors.verticalCenter: parent.verticalCenter
                     height: parent.height
@@ -619,6 +689,24 @@ Rectangle {
                         height: 3
                         radius: 2
                         color: "#70dbe4ee"
+                    }
+
+                    Rectangle {
+                        id: bufferedTrack
+                        objectName: "bufferedTrack"
+                        anchors.verticalCenter: parent.verticalCenter
+                        // Keep the cache tied to the actual position during drag previews.
+                        readonly property real startFraction: app.sessionActive && player.duration > 0 &&
+                                isFinite(player.duration) && isFinite(player.position)
+                                ? Math.max(0, Math.min(1, player.position / player.duration)) : 0
+                        readonly property real endFraction: app.bufferedPosition >= 0 && player.duration > 0 &&
+                                isFinite(player.duration)
+                                ? Math.max(startFraction, Math.min(1, app.bufferedPosition / player.duration)) : startFraction
+                        x: parent.width * startFraction
+                        width: app.sessionActive ? parent.width * (endFraction - startFraction) : 0
+                        height: 3
+                        radius: 2
+                        color: "#c0dbe4ee"
                     }
 
                     Rectangle {
@@ -664,7 +752,7 @@ Rectangle {
                     id: remainingLabel
                     anchors.right: parent.right
                     anchors.verticalCenter: parent.verticalCenter
-                    width: 36
+                    width: 42
                     text: app.formatTime(player.duration)
                     color: "#e6eaf0"
                     font.pixelSize: 10
@@ -691,7 +779,7 @@ Rectangle {
                         contentItem: PlayerTransportIcon { direction: -1 }
                         background: Rectangle {
                             radius: 5
-                            color: "transparent"
+                            color: backwardButton.pressed ? "#dc263548" : "transparent"
                         }
                     }
 
@@ -701,8 +789,8 @@ Rectangle {
                         width: app.height < 250 ? 36 : 44
                         height: app.height < 250 ? 32 : 40
                         onClicked: {
-                            var startsPlayback = player.playbackState === VideoPlayer.PausedState ||
-                                    player.playbackState === VideoPlayer.StoppedState
+                            var startsPlayback = player.playbackState === FFmpegPlayer.VideoPlayer.PausedState ||
+                                    player.playbackState === FFmpegPlayer.VideoPlayer.StoppedState
                             app.requestTogglePlayback()
                             app.showOsdForPlayback(startsPlayback)
                         }
@@ -711,7 +799,7 @@ Rectangle {
                         }
                         background: Rectangle {
                             radius: 5
-                            color: "transparent"
+                            color: playButton.pressed ? "#dc263548" : "transparent"
                         }
                     }
 
@@ -723,43 +811,33 @@ Rectangle {
                         contentItem: PlayerTransportIcon { direction: 1 }
                         background: Rectangle {
                             radius: 5
-                            color: "transparent"
+                            color: forwardButton.pressed ? "#dc263548" : "transparent"
                         }
                     }
                 }
 
-                PlayerButton {
+                YVideoOsdButton {
                     id: subtitleButton
                     objectName: "subtitleButton"
                     anchors.left: parent.left
                     anchors.verticalCenter: parent.verticalCenter
-                    width: 48
-                    height: app.height < 250 ? 28 : 32
-                    enabled: app.subtitleUrl.toString().length > 0
-                    checked: app.subtitlesEnabled
-                    onClicked: app.subtitlesEnabled = !app.subtitlesEnabled
-                    Accessible.name: checked ? "关闭字幕" : "开启字幕"
-                    contentItem: Text {
-                        text: "字幕"
-                        color: !subtitleButton.enabled ? "#777f89" : subtitleButton.checked ? "#39a9ff" : "#edf1f5"
-                        font.pixelSize: 12
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                    }
-                    background: Rectangle {
-                        radius: 4
-                        color: "transparent"
+                    text: "字幕"
+                    active: app.hasSubtitle && app.subtitlesEnabled
+                    enabled: app.hasSubtitle
+                    onTapped: {
+                        app.subtitlesEnabled = !app.subtitlesEnabled
+                        app.restartOsdTimer()
                     }
                 }
 
-                PlayerButton {
+                YVideoOsdButton {
                     id: speedButton
                     objectName: "speedButton"
                     anchors.right: parent.right
                     anchors.verticalCenter: parent.verticalCenter
-                    width: 46
-                    height: app.height < 250 ? 28 : 32
-                    onClicked: {
+                    text: player.playbackRate.toFixed(1) + "x"
+                    active: player.playbackRate !== 1.0
+                    onTapped: {
                         var rates = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
                         var index = 0
                         for (var i = 0; i < rates.length; ++i) {
@@ -769,17 +847,7 @@ Rectangle {
                             }
                         }
                         player.playbackRate = rates[(index + 1) % rates.length]
-                    }
-                    contentItem: Text {
-                        text: (player.playbackRate % 1 ? Number(player.playbackRate).toString() : Number(player.playbackRate).toFixed(0)) + "×"
-                        color: "#edf1f5"
-                        font.pixelSize: 12
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                    }
-                    background: Rectangle {
-                        radius: 4
-                        color: "transparent"
+                        app.restartOsdTimer()
                     }
                 }
             }

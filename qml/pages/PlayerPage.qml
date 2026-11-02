@@ -26,6 +26,24 @@ Rectangle {
     readonly property bool embeddedMode: !!controller && controller.useEmbeddedPlayer && !externalFallback
     readonly property var embeddedPlayer: embeddedLoader.item
     readonly property bool embeddedBusy: preparingEmbedded || (!!embeddedPlayer && embeddedPlayer.loading)
+    readonly property string loadingStage: {
+        if (!visible || playbackError.length) return ""
+        if (launchRequested) return "address"
+        if (preparingEmbedded) return "preparing"
+        if (!embeddedMode || !embeddedPlayer || !embeddedPlayer.sessionActive) return ""
+        if (embeddedPlayer.seeking) return "seeking"
+        if (embeddedPlayer.connecting) return "connecting"
+        if (embeddedPlayer.buffering) return "buffering"
+        return ""
+    }
+    readonly property bool loadingActive: loadingStage.length > 0
+
+    onLoadingActiveChanged: restartControlsTimer()
+
+    function restartControlsTimer() {
+        hideControlsTimer.stop()
+        if (visible && controlsVisible && !loadingActive) hideControlsTimer.start()
+    }
 
     function formatTime(value) {
         var seconds = Math.max(0, Math.floor(value || 0))
@@ -35,15 +53,16 @@ Rectangle {
     }
 
     function startSelection() {
-        launchRequested = false
         if (!controller) return
         if (embeddedMode) {
             if (!embeddedPlayer) return
             preparingEmbedded = true
+            launchRequested = false
             controller.playback.prepareEmbeddedPlayback()
         } else {
             controller.playback.launchExternalPlayerCurrentSelection()
             playbackStarted = true
+            launchRequested = false
         }
     }
 
@@ -52,7 +71,7 @@ Rectangle {
         if (embeddedMode && embeddedPlayer && embeddedPlayer.sessionActive
                 && (embeddedPlayer.playing || embeddedPlayer.paused)) {
             embeddedPlayer.togglePlayback()
-            hideControlsTimer.restart()
+            restartControlsTimer()
             return
         }
         if (controller.isLoading || launchRequested || embeddedBusy) return
@@ -68,13 +87,15 @@ Rectangle {
         else
             controller.playback.fetchPlayUrl(playQuality)
         if (!controller.isLoading) launchRequested = false
-        hideControlsTimer.restart()
+        restartControlsTimer()
         playPauseIcon.refresh()
     }
 
     function stopPlayback() {
         launchRequested = false
         preparingEmbedded = false
+        playbackStarted = false
+        hideControlsTimer.stop()
         if (embeddedPlayer) embeddedPlayer.stopAndReport()
         if (controller) controller.playback.cancelEmbeddedPlayback()
     }
@@ -104,8 +125,8 @@ Rectangle {
         target: controller ? controller.playback : null
         function onEmbeddedPlaybackReady(videoUrl, audioUrl, subtitleUrl, startSeconds) {
             if (!preparingEmbedded || !embeddedMode || !embeddedPlayer) return
-            preparingEmbedded = false
             embeddedPlayer.openSelection(videoUrl, audioUrl, subtitleUrl, startSeconds)
+            preparingEmbedded = false
         }
         function onEmbeddedPlaybackFailed(message) {
             preparingEmbedded = false
@@ -135,7 +156,7 @@ Rectangle {
             playPauseIcon.refresh()
             if (embeddedPlayer && embeddedPlayer.playing) {
                 playbackStarted = true
-                hideControlsTimer.restart()
+                restartControlsTimer()
             }
             else controlsVisible = true
         }
@@ -168,6 +189,7 @@ Rectangle {
             active: playerPage.embeddedMode
             source: active ? "../components/EmbeddedPlayer.qml" : ""
             onLoaded: {
+                item.preparingPlayback = Qt.binding(function() { return playerPage.launchRequested || playerPage.preparingEmbedded })
                 item.displayTitle = Qt.binding(function() {
                     return controller ? controller.videoTitle : ""
                 })
@@ -257,7 +279,7 @@ Rectangle {
         onClicked: {
             controlsVisible = !controlsVisible;
             playPauseIcon.refresh(); // 重新核对播放器状态，更新暂停/播放图标
-            if (controlsVisible) hideControlsTimer.restart();
+            if (controlsVisible) restartControlsTimer();
         }
     }
 
@@ -468,7 +490,7 @@ Rectangle {
                             } else {
                                 embeddedPlayer.seekTo(embeddedPlayer.position + (index === 0 ? -10 : 10))
                             }
-                            hideControlsTimer.restart()
+                            restartControlsTimer()
                         }
                     }
                 }
@@ -494,9 +516,9 @@ Rectangle {
         onPositionChanged: if (pressed) updatePreview(mouse.x)
         onReleased: {
             embeddedPlayer.seekTo(preview * embeddedPlayer.duration)
-            hideControlsTimer.restart()
+            restartControlsTimer()
         }
-        onCanceled: hideControlsTimer.restart()
+        onCanceled: restartControlsTimer()
         Rectangle {
             anchors.verticalCenter: parent.verticalCenter
             width: parent.width
@@ -516,28 +538,33 @@ Rectangle {
     // ══════════════════════════════════════════
     //  Loading 指示器
     // ══════════════════════════════════════════
-    Rectangle {
-        anchors.centerIn: parent
+    Components.PlayerLoadingIndicator {
+        id: loadingIndicator
+        anchors.horizontalCenter: parent.horizontalCenter
+        y: ((embeddedPlayer ? playerPage.height - embeddedPlayer.controlsHeight
+                            : controlsVisible ? bottomBar.y - topBar.height : playerPage.height) - height) / 2
+           + (!embeddedPlayer && controlsVisible ? topBar.height : 0)
         z: 50
-        visible: launchRequested && !!controller && controller.isLoading
-        width: loadingLabel.implicitWidth + 20
-        height: 28
-        radius: 5
-        color: "#b3101620"
-        Text {
-            id: loadingLabel
-            anchors.centerIn: parent
-            text: "获取播放地址…  取消"
-            color: "#e6eaf0"
-            font.family: Theme.fontFamily
-            font.pixelSize: 11
-        }
-        MouseArea {
-            anchors.fill: parent
-            onClicked: {
-                stopPlayback()
-                if (controller) controller.cancelAll()
+        active: playerPage.loadingActive
+        message: {
+            switch (playerPage.loadingStage) {
+            case "address": return "获取播放地址…"
+            case "preparing": return "准备播放…"
+            case "seeking": return "正在定位…"
+            case "connecting": return "正在连接…"
+            case "buffering": return "正在缓冲…"
+            default: return ""
             }
+        }
+        progress: (playerPage.loadingStage === "seeking" || playerPage.loadingStage === "buffering") && embeddedPlayer
+                  ? embeddedPlayer.bufferProgress : -1
+        downloadSpeed: (playerPage.loadingStage === "seeking" || playerPage.loadingStage === "buffering") && embeddedPlayer
+                       ? embeddedPlayer.downloadSpeed : -1
+        cancelEnabled: playerPage.loadingStage === "address"
+        fontFamily: Theme.fontFamily
+        onCancelRequested: {
+            stopPlayback()
+            if (controller) controller.cancelAll()
         }
     }
 
@@ -548,14 +575,14 @@ Rectangle {
         id: hideControlsTimer
         interval: 3500
         onTriggered: {
-            if (!playbackError.length && (!embeddedMode || (embeddedPlayer && embeddedPlayer.playing)))
+            if (!loadingActive && !playbackError.length && (!embeddedMode || (embeddedPlayer && embeddedPlayer.playing)))
                 controlsVisible = false
         }
     }
 
 
     Component.onCompleted: {
-        hideControlsTimer.start();
+        restartControlsTimer();
         if (controller) controller.video.reportCurrentVideoAsRecentViewIfNeeded();
     }
 

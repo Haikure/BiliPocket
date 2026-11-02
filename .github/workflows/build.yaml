@@ -1,0 +1,195 @@
+name: Build BiliPocket release
+
+on:
+  push:
+    tags:
+      - '*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: bilipocket-build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  QT_URL: https://github.com/Redbeanw44602/aarch64-linux-qt-5.15.2/releases/latest/download/aarch64-linux-qt-5.15.2.tar.gz
+  CROSS_TARGET: aarch64-linux-gnu.2.27
+
+jobs:
+  build:
+    name: Build ARM64 plugin
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Install host build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            binutils curl file g++ make patch pkg-config qtbase5-dev-tools \
+            qtdeclarative5-dev-tools unzip zip
+
+      - name: Set up xmake
+        uses: xmake-io/github-action-setup-xmake@v1
+        with:
+          xmake-version: latest
+
+      - name: Set up Zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.15.2
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: 1.25.x
+          cache: false
+
+      - name: Cache xmake packages
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.xmake
+            .xmake
+          key: bilipocket-xmake-${{ hashFiles('xmake.lua') }}
+          restore-keys: |
+            bilipocket-xmake-
+
+      - name: Download ARM64 Qt 5.15.2 SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/aarch64-linux-qt-5.15.2.tar.gz"
+          extract="$RUNNER_TEMP/qt-sdk"
+          curl --fail --location --retry 3 --retry-delay 2 \
+            --output "$archive" "$QT_URL"
+          mkdir -p "$extract"
+          tar -xzf "$archive" -C "$extract"
+
+          qt_root="$extract"
+          [[ -f "$qt_root/bin/qmake.cpp" ]] || {
+            echo 'Qt SDK does not contain bin/qmake.cpp' >&2
+            exit 1
+          }
+          (
+            cd "$qt_root/bin"
+            g++ -fmax-errors=1 -o qmake -D"PREFIX=\"$qt_root\"" qmake.cpp
+          )
+          [[ -x "$qt_root/bin/qmake" ]] || {
+            echo "Failed to build host qmake: $qt_root/bin/qmake" >&2
+            exit 1
+          }
+          [[ -x "$qt_root/bin/moc" ]] || {
+            echo "Qt moc is not executable: $qt_root/bin/moc" >&2
+            exit 1
+          }
+          [[ -d "$qt_root/include/QtCore" ]] || {
+            echo "Qt headers are missing: $qt_root/include/QtCore" >&2
+            exit 1
+          }
+          qt_core="$(find "$qt_root/lib" -maxdepth 1 -name 'libQt5Core.so*' -print -quit)"
+          [[ -n "$qt_core" ]] || {
+            echo "Qt ARM64 libraries are missing under $qt_root/lib" >&2
+            exit 1
+          }
+
+          echo "QT_ROOT=$qt_root" >> "$GITHUB_ENV"
+          echo "$qt_root/bin" >> "$GITHUB_PATH"
+          "$qt_root/bin/qmake" -query QT_VERSION
+          file "$qt_root/bin/qmake" "$qt_core"
+
+      - name: Configure ARM64 release build
+        shell: bash
+        run: |
+          set -euo pipefail
+          xmake f -c -p linux -a arm64-v8a -m release \
+            --toolchain=zigcc \
+            --cross="$CROSS_TARGET" \
+            --qt="$QT_ROOT" \
+            --ccache=n -y
+
+      - name: Build and package plugin
+        shell: bash
+        run: ./package.sh
+
+      - name: Verify package
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f bili_plugin.zip
+          readelf -h build/linux/arm64-v8a/release/libbili_plugin.so \
+            | grep -Fq 'AArch64'
+          readelf -h go_server/server | grep -Fq 'AArch64'
+          readelf -h go_server/bili-sms | grep -Fq 'AArch64'
+
+          zip_files="$(unzip -Z1 bili_plugin.zip)"
+          for path in \
+            bili_plugin/libbili_plugin.so \
+            bili_plugin/server \
+            bili_plugin/bili-sms \
+            bili_plugin/metadata.json \
+            bili_plugin/icon.png \
+            bili_plugin/qml/main.qml; do
+            grep -Fxq "$path" <<< "$zip_files" || {
+              echo "Required file is missing from ZIP: $path" >&2
+              exit 1
+            }
+          done
+
+          roots="$(awk -F/ 'NF {print $1}' <<< "$zip_files" | sort -u)"
+          [[ "$roots" == 'bili_plugin' ]] || {
+            echo 'ZIP must contain only the bili_plugin top-level directory:' >&2
+            printf '%s\n' "$roots" >&2
+            exit 1
+          }
+          printf '%s\n' "$zip_files"
+
+      - name: Upload ZIP artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: bilipocket-aarch64-linux-gnu-2.27
+          path: bili_plugin.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+  release:
+    name: Publish GitHub release
+    needs: build
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Download build ZIP
+        uses: actions/download-artifact@v5
+        with:
+          name: bilipocket-aarch64-linux-gnu-2.27
+          path: release-assets
+
+      - name: Verify release asset
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(find release-assets -maxdepth 1 -type f -name '*.zip' | wc -l)" -eq 1
+          unzip -Z1 release-assets/*.zip \
+            | awk -F/ 'NF {print $1}' \
+            | sort -u \
+            | grep -Fxq 'bili_plugin'
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          body_path: CHANGELOG.md
+          generate_release_notes: false
+          fail_on_unmatched_files: true
+          files: release-assets/*.zip
