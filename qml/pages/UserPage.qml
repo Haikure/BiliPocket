@@ -11,10 +11,12 @@ Rectangle {
 
     property var controller: null
     signal backClicked()
+    signal homeRequested()
+    signal localPlaybackRequested(var mediaTask)
     signal videoSelected(string bvid)
     signal watchLaterRequested()
 
-    // 0=个人中心, 1=收藏夹列表, 2=收藏夹详情, 3=最近观看, 4=设置, 5=字幕设置, 6=偏好设置
+    // 0=个人中心, 1=收藏夹列表, 2=收藏夹详情, 3=最近观看, 4=设置, 5=字幕设置, 6=偏好设置, 7=缓存
     property int favView: 0
     property string currentFavTitle: ""
     property int currentFavId: 0
@@ -33,6 +35,14 @@ Rectangle {
 
     function bumpFont(size) {
         return size + 1
+    }
+
+    function drawCacheIcon(ctx) {
+        ctx.beginPath()
+        ctx.moveTo(8, 1.5); ctx.lineTo(8, 10)
+        ctx.moveTo(4.5, 6.5); ctx.lineTo(8, 10); ctx.lineTo(11.5, 6.5)
+        ctx.moveTo(2, 10); ctx.lineTo(2, 14); ctx.lineTo(14, 14); ctx.lineTo(14, 10)
+        ctx.stroke()
     }
 
     function normalizedFavView(view) {
@@ -102,6 +112,7 @@ Rectangle {
     }
 
     function backInternal() {
+        if (favView === 7) { favView = 0; return }
         if (loginPanelVisible && (!controller || !controller.loggedIn)) {
             loginPanelVisible = false
             return
@@ -198,6 +209,7 @@ Rectangle {
     Components.TitleBar {
         id: titleBar
         title: {
+            if (favView === 7) return "我的缓存"
             if (!controller || !controller.loggedIn) return loginPanelVisible ? "扫码登录" : "个人中心"
             if (favView === 1) return "我的收藏夹"
             if (favView === 2) return currentFavTitle.length > 0 ? currentFavTitle : "收藏夹"
@@ -211,13 +223,28 @@ Rectangle {
         showSearch: controller && controller.loggedIn && favView === 3
         anchors.top: parent.top
         onBackClicked: userPage.backInternal()
+        onHomeClicked: userPage.homeRequested()
         onSearchClicked: historySearchKeyboard.open(userPage.recentHistoryKeyword)
+    }
+
+    Loader {
+        anchors.top: titleBar.bottom; anchors.bottom: parent.bottom
+        anchors.left: parent.left; anchors.right: parent.right
+        active: userPage.favView === 7
+        visible: active
+        z: 5
+        sourceComponent: Component {
+            DownloadsPage {
+                queue: controller ? controller.downloadQueue : null
+                onPlayRequested: userPage.localPlaybackRequested(mediaTask)
+            }
+        }
     }
 
     // ====== 未登录：个人中心占位 ======
     Item {
         id: loggedOutProfileArea
-        visible: (!controller || !controller.loggedIn) && !loginPanelVisible
+        visible: (!controller || !controller.loggedIn) && !loginPanelVisible && favView === 0
         anchors.top: titleBar.bottom
         anchors.bottom: parent.bottom
         anchors.left: parent.left
@@ -360,6 +387,7 @@ Rectangle {
 
                     Repeater {
                         model: [
+                            { label: "缓存", action: "downloads" },
                             { label: "收藏夹", action: "login" },
                             { label: "最近观看", action: "login" },
                             { label: "稍后再看", action: "login" },
@@ -371,8 +399,8 @@ Rectangle {
                                 width: 36
                                 height: 36
                                 radius: 18
-                                color: lockedEntryArea.pressed ? Theme.withAlpha(Theme.primary, 0.18) : Theme.withAlpha(Theme.primary, modelData.action === "settings" ? 0.12 : 0.08)
-                                border.color: Theme.withAlpha(Theme.primary, modelData.action === "settings" ? 0.35 : 0.2)
+                                color: lockedEntryArea.pressed ? Theme.withAlpha(Theme.primary, 0.18) : Theme.withAlpha(Theme.primary, modelData.action !== "login" ? 0.12 : 0.08)
+                                border.color: Theme.withAlpha(Theme.primary, modelData.action !== "login" ? 0.35 : 0.2)
                                 border.width: 1
                                 Canvas {
                                     anchors.centerIn: parent
@@ -381,12 +409,14 @@ Rectangle {
                                     onPaint: {
                                         var ctx = getContext("2d")
                                         ctx.clearRect(0, 0, width, height)
-                                        ctx.strokeStyle = modelData.action === "settings" ? Theme.primary : Theme.textTertiary
-                                        ctx.fillStyle = Theme.withAlpha(ctx.strokeStyle, modelData.action === "settings" ? 0.18 : 0.12)
+                                        ctx.strokeStyle = modelData.action !== "login" ? Theme.primary : Theme.textTertiary
+                                        ctx.fillStyle = Theme.withAlpha(ctx.strokeStyle, modelData.action !== "login" ? 0.18 : 0.12)
                                         ctx.lineWidth = 1.4
                                         ctx.lineCap = "round"
                                         ctx.lineJoin = "round"
-                                        if (modelData.action === "settings") {
+                                        if (modelData.action === "downloads") {
+                                            userPage.drawCacheIcon(ctx)
+                                        } else if (modelData.action === "settings") {
                                             ctx.beginPath()
                                             ctx.arc(8, 8, 4.5, 0, Math.PI * 2)
                                             ctx.stroke()
@@ -429,7 +459,9 @@ Rectangle {
                                     id: lockedEntryArea
                                     anchors.fill: parent
                                     onClicked: {
-                                        if (modelData.action === "settings") {
+                                        if (modelData.action === "downloads") {
+                                            favView = 7
+                                        } else if (modelData.action === "settings") {
                                             favView = 4
                                         } else {
                                             userPage.openLoginPanel()
@@ -439,7 +471,7 @@ Rectangle {
                             }
                             Text {
                                 text: modelData.label
-                                color: modelData.action === "settings" ? Theme.textPrimary : Theme.textSecondary
+                                color: modelData.action !== "login" ? Theme.textPrimary : Theme.textSecondary
                                 font.family: Theme.fontFamily
                                 font.pixelSize: userPage.bumpFont(Theme.fontSmall)
                                 anchors.horizontalCenter: parent.horizontalCenter
@@ -1010,10 +1042,46 @@ Rectangle {
                         }
                     }
 
-                    // 快捷入口：收藏夹 / 稍后再看 / 最近观看 / 设置
+                    // 快捷入口：缓存 / 收藏夹 / 最近观看 / 稍后再看 / 设置
                     Row {
                         anchors.horizontalCenter: parent.horizontalCenter
                         spacing: Theme.spacingLarge
+
+                        Column {
+                            spacing: 6
+                            Rectangle {
+                                width: 36; height: 36; radius: 18
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                color: cacheEntryArea.pressed ? Theme.withAlpha(Theme.primary, 0.2) : Theme.withAlpha(Theme.primary, 0.12)
+                                border.color: Theme.withAlpha(Theme.primary, 0.35)
+                                border.width: 1
+                                Canvas {
+                                    anchors.centerIn: parent
+                                    width: 16; height: 16
+                                    onPaint: {
+                                        var ctx = getContext("2d")
+                                        ctx.clearRect(0, 0, width, height)
+                                        ctx.strokeStyle = Theme.primary
+                                        ctx.lineWidth = 1.6
+                                        ctx.lineCap = "round"
+                                        ctx.lineJoin = "round"
+                                        userPage.drawCacheIcon(ctx)
+                                    }
+                                }
+                                MouseArea {
+                                    id: cacheEntryArea
+                                    anchors.fill: parent
+                                    onClicked: userPage.favView = 7
+                                }
+                            }
+                            Text {
+                                text: "缓存"
+                                color: Theme.textSecondary
+                                font.family: Theme.fontFamily
+                                font.pixelSize: userPage.bumpFont(Theme.fontSmall)
+                                anchors.horizontalCenter: parent.horizontalCenter
+                            }
+                        }
 
                         Column {
                             spacing: 6

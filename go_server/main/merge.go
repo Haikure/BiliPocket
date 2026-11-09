@@ -252,7 +252,7 @@ func mergeM4s(ctx context.Context, videoPath, audioPath, outputPath string) erro
 	}
 	defer a.file.Close()
 
-	if len(v.f.Moov.Traks) != 1 || len(a.f.Moov.Traks) != 1 {
+	if v.f.Moov == nil || a.f.Moov == nil || len(v.f.Moov.Traks) != 1 || len(a.f.Moov.Traks) != 1 {
 		return errors.New("m4s 必须为单轨文件")
 	}
 	if len(v.f.Segments) == 0 || len(a.f.Segments) == 0 {
@@ -382,8 +382,9 @@ func mergeM4s(ctx context.Context, videoPath, audioPath, outputPath string) erro
 		return err
 	}
 	defer out.Close()
+	writer := &mergeContextWriter{ctx: ctx, out: out}
 
-	if err := init.Encode(out); err != nil {
+	if err := init.Encode(writer); err != nil {
 		return fmt.Errorf("写入 init 失败: %w", err)
 	}
 
@@ -396,12 +397,27 @@ func mergeM4s(ctx context.Context, videoPath, audioPath, outputPath string) erro
 		if it.src != v {
 			newTrackID = 2
 		}
-		if err := writeFragment(out, it.src.file, it.frag, newTrackID, seq); err != nil {
+		if err := writeFragment(writer, it.src.file, it.frag, newTrackID, seq); err != nil {
 			return err
 		}
 		seq++
 	}
-	return nil
+	if err := out.Sync(); err != nil {
+		return err
+	}
+	return out.Close()
+}
+
+type mergeContextWriter struct {
+	ctx context.Context
+	out io.Writer
+}
+
+func (w *mergeContextWriter) Write(p []byte) (int, error) {
+	if err := w.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return w.out.Write(p)
 }
 
 func removeMehd(mvex *mp4.MvexBox) {

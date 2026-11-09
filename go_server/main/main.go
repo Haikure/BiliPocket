@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -62,6 +63,8 @@ func main() {
 	printBanner(debug)
 
 	globalClient = NewBilibiliClient("", "")
+	// Restored downloads can arrive before the asynchronous WBI refresh.
+	globalClient.setDefaultWbiKeys()
 
 	// 启动时加载本地 Cookie 缓存：loadCookieStore 内部会写字段并发布快照
 	if cs, err := loadCookies(); err == nil {
@@ -72,6 +75,13 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
+	serverPath, err := os.Executable()
+	if err != nil {
+		logError("无法确定插件目录: %s", err)
+		return
+	}
+	downloads = newDownloadQueue(filepath.Join(filepath.Dir(serverPath), ".downloads"), mergeDownloadDir)
+	defer downloads.close()
 	setupRoutes(mux)
 
 	handler := recoverMiddleware(loggingMiddleware(mux))
@@ -110,6 +120,7 @@ func main() {
 		sig := <-sigChan
 		logPlain("")
 		logWarn("收到 %s 信号，正在关闭...", sig.String())
+		downloads.stop()
 
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()

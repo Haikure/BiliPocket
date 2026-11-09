@@ -6,6 +6,7 @@ singleton Theme 1.0 Theme.qml
 # Components
 VideoCardCompact 1.0 components/VideoCardCompact.qml
 TitleBar 1.0 components/TitleBar.qml
+HomeButton 1.0 components/HomeButton.qml
 LoadingIndicator 1.0 components/LoadingIndicator.qml
 ErrorOverlay 1.0 components/ErrorOverlay.qml
 Toast 1.0 components/Toast.qml
@@ -34,3 +35,5 @@ SettingsPage 1.0 pages/SettingsPage.qml
 UpUserPage 1.0 pages/UpUserPage.qml
 VideoSeasonPage 1.0 pages/VideoSeasonPage.qml
 WatchLaterPage 1.0 pages/WatchLaterPage.qml
+DownloadsPage 1.0 pages/DownloadsPage.qml
+DownloadRow 1.0 components/DownloadRow.qml

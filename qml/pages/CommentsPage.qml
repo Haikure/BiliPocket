@@ -51,6 +51,7 @@ Rectangle {
     property bool commentImagesDeferred: false
     property bool commentLoadingMaskVisible: false
     signal backClicked()
+    signal homeRequested()
 
     function deferCommentImages() {
         commentImageResumeTimer.stop()
@@ -429,6 +430,13 @@ Rectangle {
         height: 28
         z: 20
 
+        Components.HomeButton {
+            id: homeButton
+            anchors.right: parent.right
+            anchors.rightMargin: 4
+            onClicked: commentsPage.homeRequested()
+        }
+
         Rectangle {
             id: backButton
             width: 20
@@ -487,8 +495,8 @@ Rectangle {
 
         Rectangle {
             id: headerCountChip
-            anchors.right: parent.right
-            anchors.rightMargin: 8
+            anchors.right: homeButton.left
+            anchors.rightMargin: 6
             anchors.top: parent.top
             anchors.topMargin: 6
             width: headerCountText.implicitWidth + 12

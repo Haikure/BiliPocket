@@ -1,6 +1,7 @@
 #include "BiliController.h"
 #include "BiliModels.h"
 #include "BiliNetwork.h"
+#include "BiliDownloadQueue.h"
 #include "modules/comment/BiliCommentModule.h"
 #include "modules/favorite/BiliFavoriteModule.h"
 #include "modules/feed/BiliFeedModule.h"
@@ -89,8 +90,7 @@ BiliController::BiliController(QObject *parent)
       m_loginModule(std::make_unique<BiliLoginModule>(this)),
       m_historyModule(std::make_unique<BiliHistoryModule>(this)),
       m_seasonModule(std::make_unique<BiliSeasonModule>(this)),
-      m_playQuality(64), m_isDownloading(false),
-      m_downloadProgress(0), m_loggedIn(false), m_isFavorited(false), m_isCoined(false), m_isLiked(false), m_isWatchLater(false),
+      m_playQuality(64), m_loggedIn(false), m_isFavorited(false), m_isCoined(false), m_isLiked(false), m_isWatchLater(false),
       m_userName(""), m_userFace(""), m_qrcodeUrl(""), m_qrcodeKey(""),
       m_userId(0), m_userLevel(0), m_userExp(0), m_userExpMin(0), m_userExpNext(0), m_userCoins(0), m_userFans(0),
       m_userFollowing(0), m_userSign(""), m_userVipLabel(""),
@@ -116,6 +116,7 @@ BiliController::BiliController(QObject *parent)
       m_relatedVideoModel(new VideoListModel(this)),
       m_upSeasonModel(new UpSeasonListModel(this)),
       m_destroying(false) {
+  connect(BiliDownloadQueue::instance(), &BiliDownloadQueue::message, this, &BiliController::toastMessage);
   connect(m_network, &BiliNetwork::networkError, this,
           [this](const QString &msg) {
             if (!m_destroying && !m_goServerRestartRequired)
@@ -189,6 +190,8 @@ void BiliController::setIsLoading(bool loading) {
 }
 
 // ====== Properties ======
+
+QObject *BiliController::downloadQueue() const { return BiliDownloadQueue::instance(); }
 
 QString BiliController::videoTitle() const { return m_currentVideo.title; }
 QString BiliController::videoDesc() const { return m_currentVideo.desc; }
@@ -516,14 +519,6 @@ void BiliController::cancelAll() {
   if (m_seasonVideoModel) m_seasonVideoModel->setLoading(false);
   if (m_upSeasonModel) m_upSeasonModel->setLoading(false);
 
-  // 下载中也允许中止显示状态
-  if (m_isDownloading) {
-    m_isDownloading = false;
-    m_downloadProgress = 0;
-    m_downloadStatus.clear();
-    emit downloadStateChanged();
-  }
-
   if (m_network) {
     m_network->cancelAllRequests();
   }
@@ -699,14 +694,15 @@ public:
 
 private:
   void probeAlive(std::function<void(bool)> callback) {
+    const int attempt = m_attempt;
     auto *socket = new QTcpSocket(this);
     auto reported = std::make_shared<bool>(false);
-    auto report = [socket, reported, callback](bool ok) {
+    auto report = [this, socket, reported, callback, attempt](bool ok) {
       if (*reported) return;
       *reported = true;
       socket->abort();
       socket->deleteLater();
-      callback(ok);
+      if (m_busy && m_attempt == attempt) callback(ok);
     };
     connect(socket, &QAbstractSocket::connected, this,
             [report]() { report(true); });
@@ -780,6 +776,7 @@ private:
   // go 端收到 SIGTERM 后走优雅关闭（Shutdown 上限 10s），期间端口仍被占用。
   // 固定延时赌不赢：新进程会撞 address already in use 然后立刻 os.Exit(1)。
   void waitPortFreeThenLaunch() {
+    if (!m_busy) return;
     if (++m_portWaitCount > PORT_WAIT_MAX) {
       qWarning() << "BiliPlugin: Port 8000 still busy, launching anyway";
       launchServer();
@@ -796,6 +793,7 @@ private:
   }
 
   void launchServer() {
+    if (!m_busy) return;
     qDebug() << "BiliPlugin: Starting API server...";
 
     const QString execPath = API_SERVER_PATH + API_SERVER_EXEC;
@@ -862,6 +860,7 @@ private:
   }
 
   void pollReadyOnce() {
+    if (!m_busy) return;
     if (!s_apiServerProcess ||
         s_apiServerProcess->state() != QProcess::Running) {
       qWarning() << "BiliPlugin: API server failed to stay running";
@@ -943,141 +942,6 @@ void bili_restartApiServerAsync(std::function<void(bool)> onFinished) {
   serverManager()->start(true, std::move(onFinished));
 }
 
-// 同步拉起：不依赖事件循环。用于 init_plugin（宿主可能在无 dispatcher
-// 的加载线程里调插件入口；纯 QTimer/QTcpSocket 异步链会永久卡住，
-// 表现为 Go 不启动 + ready 闸门一直关着、一个请求都不发）。
-bool bili_startApiServerSync() {
-  qDebug() << "BiliPlugin: Starting API server (sync)...";
-
-  auto probeOnce = []() -> bool {
-    QTcpSocket socket;
-    socket.connectToHost(QStringLiteral("127.0.0.1"), 8000);
-    return socket.waitForConnected(300);
-  };
-
-  if (probeOnce()) {
-    qDebug() << "BiliPlugin: API server already running, reuse it";
-    return true;
-  }
-
-  // 清理残留进程（路径不要拼出双斜杠，否则 pgrep -f 匹配失败）
-  const QString execPath = API_SERVER_PATH + API_SERVER_EXEC;
-  {
-    QProcess pgrepProcess;
-    pgrepProcess.start(QStringLiteral("pgrep"),
-                       QStringList() << QStringLiteral("-f") << execPath);
-    pgrepProcess.waitForFinished(2000);
-    if (pgrepProcess.exitCode() == 0) {
-      const QString output =
-          QString::fromLocal8Bit(pgrepProcess.readAllStandardOutput()).trimmed();
-      const QStringList pids = output.split('\n', Qt::SkipEmptyParts);
-      for (const QString &pid : pids) {
-        bool ok = false;
-        const int pidNum = pid.toInt(&ok);
-        if (ok && pidNum > 0) {
-          qDebug() << "BiliPlugin: Killing existing process PID:" << pidNum;
-          kill(pidNum, SIGTERM);
-        }
-      }
-      QThread::msleep(500);
-      for (const QString &pid : pids) {
-        bool ok = false;
-        const int pidNum = pid.toInt(&ok);
-        if (ok && pidNum > 0 && kill(pidNum, 0) == 0) {
-          qWarning() << "BiliPlugin: Force killing PID:" << pidNum;
-          kill(pidNum, SIGKILL);
-        }
-      }
-    }
-  }
-
-  // go 优雅关闭可能占着端口，轮询等待释放
-  for (int i = 0; i < 40; ++i) {
-    if (!probeOnce())
-      break;
-    QThread::msleep(250);
-  }
-
-  if (!QFile::exists(execPath)) {
-    qWarning() << "BiliPlugin: API server executable not found:" << execPath;
-    return false;
-  }
-
-  QFile serverFile(execPath);
-  if (!(serverFile.permissions() & QFile::ExeUser)) {
-    serverFile.setPermissions(serverFile.permissions() | QFile::ExeUser |
-                              QFile::ExeGroup | QFile::ExeOther);
-  }
-
-  // 若上次异步路径留下了已死的 QProcess 对象，先丢掉
-  if (s_apiServerProcess) {
-    s_apiServerProcess->disconnect();
-    s_apiServerProcess->deleteLater();
-    s_apiServerProcess = nullptr;
-  }
-
-  s_apiServerProcess = new QProcess();
-  s_apiServerProcess->setWorkingDirectory(API_SERVER_PATH);
-
-  QObject::connect(
-      s_apiServerProcess, &QProcess::readyReadStandardOutput, []() {
-        if (s_apiServerProcess) {
-          qDebug() << "API Server:"
-                   << s_apiServerProcess->readAllStandardOutput().constData();
-        }
-      });
-  QObject::connect(
-      s_apiServerProcess, &QProcess::readyReadStandardError, []() {
-        if (s_apiServerProcess) {
-          qWarning() << "API Server Error:"
-                     << s_apiServerProcess->readAllStandardError().constData();
-        }
-      });
-  QObject::connect(
-      s_apiServerProcess,
-      QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
-      [](int exitCode, QProcess::ExitStatus exitStatus) {
-        qWarning() << "BiliPlugin: API server exited with code" << exitCode
-                   << ", status:"
-                   << (exitStatus == QProcess::NormalExit ? "normal"
-                                                          : "crashed");
-      });
-
-  s_apiServerProcess->start(execPath, QStringList());
-  if (!s_apiServerProcess->waitForStarted(5000)) {
-    qWarning() << "BiliPlugin: Failed to start API server:"
-               << s_apiServerProcess->errorString();
-    delete s_apiServerProcess;
-    s_apiServerProcess = nullptr;
-    return false;
-  }
-
-  // 端口探测：go 端现在先 Listen 再 Init，通常很快可连。
-  // 给足时间覆盖进程启动抖动；不要因为探测超时就杀掉子进程。
-  bool ready = false;
-  for (int i = 0; i < 50; ++i) { // 50 * 100ms = 5s
-    if (probeOnce()) {
-      ready = true;
-      break;
-    }
-    if (s_apiServerProcess->state() != QProcess::Running) {
-      qWarning() << "BiliPlugin: API server exited during bring-up";
-      delete s_apiServerProcess;
-      s_apiServerProcess = nullptr;
-      return false;
-    }
-    QThread::msleep(100);
-  }
-
-  if (!ready) {
-    qWarning() << "BiliPlugin: API server started but port 8000 not ready yet;"
-               << "keeping process, requests may retry";
-  } else {
-    qDebug() << "BiliPlugin: API server started successfully, PID:"
-             << s_apiServerProcess->processId();
-  }
-  return s_apiServerProcess->state() == QProcess::Running;
-}
 
 void bili_stopApiServer() {
   qDebug() << "BiliPlugin: Stopping API server...";
@@ -1111,16 +975,8 @@ void init_plugin() {
   qmlRegisterType<FavoriteFolderModel>("BiliPlugin", 1, 0, "FavoriteFolderModel");
   qmlRegisterType<UpSeasonListModel>("BiliPlugin", 1, 0, "UpSeasonListModel");
 
-  // 同步拉起 Go（见 bili_startApiServerSync 注释）。
-  // 这里绝不能碰 BiliNetwork：
-  // 1) m_apiServerReady 默认 true，同步启动返回时端口已可连，init 阶段无需关闸；
-  // 2) 宿主常在无事件循环的加载线程调 init_plugin——若在这里
-  //    BiliNetwork::instance()，会把 QNAM 单例钉在错误线程，之后主线程
-  //    get() 发得出去也收不到 finished（表现同样是"根本不发请求"）。
-  // 异步关闸只留给 UI 线程上的 restartGoServer。
-  if (!bili_startApiServerSync()) {
-    qWarning() << "BiliPlugin: Warning - API server failed to start";
-  }
+  // Startup may run on a loader thread without a dispatcher. Defer all network
+  // and process work to attach_engine's event loop; never block plugin opening.
 
   qDebug() << "BiliPlugin: Registered successfully!";
 }
@@ -1135,8 +991,10 @@ void attach_engine(QQmlEngine *engine) {
     // 在引擎/GUI 线程首次触及 BiliNetwork，保证 QNAM 线程亲和正确
     BiliNetwork *network = BiliNetwork::instance();
     network->resetApiServerState();
-    // 插件热重载后若上次 destroy 关过闸又丢了回调，这里兜底放行
-    network->setApiServerReady(true);
+    network->beginApiServerRestart();
+    QTimer::singleShot(0, network, [network]() {
+      bili_startApiServerAsync([network](bool ok) { network->finishApiServerRestart(ok); });
+    });
     s_imageProvider = new BiliImageProvider(network);
 
     s_engine->addImageProvider("bili", s_imageProvider);
@@ -1147,6 +1005,7 @@ void attach_engine(QQmlEngine *engine) {
 
 void destroy_plugin() {
   qDebug() << "BiliPlugin: Destroying...";
+  BiliDownloadQueue::destroyInstance();
 
   // 删除 manager 会连带丢弃其挂起的回调与定时器
   delete s_serverManager;

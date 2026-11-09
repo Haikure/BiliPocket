@@ -4,6 +4,7 @@
 #include <QtGlobal>
 #include <QString>
 #include <QStringList>
+#include <QVariantMap>
 #include <functional>
 #include <vector>
 
@@ -19,6 +20,8 @@ public:
   Q_INVOKABLE void cancelDownload();
   Q_INVOKABLE void cleanupTempSubtitle();
   Q_INVOKABLE bool externalPlayerRunning() const;
+  Q_INVOKABLE QVariantMap localMediaSource(const QString &path);
+  Q_INVOKABLE bool launchLocalFile(const QString &path, const QString &title);
   Q_INVOKABLE void launchExternalPlayer(const QString &path);
   Q_INVOKABLE void launchExternalPlayerWithAudioUrl(const QString &videoUrl, const QString &audioUrl);
   Q_INVOKABLE void launchExternalPlayerWithAudioUrlAndSubtitle(const QString &videoUrl, const QString &audioUrl, const QString &subtitlePath);

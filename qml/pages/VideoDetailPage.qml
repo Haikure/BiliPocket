@@ -73,6 +73,7 @@ Rectangle {
     }
 
     signal backClicked()
+    signal homeRequested()
     signal playRequested(int quality)
     signal commentsRequested()
     signal upRequested(var mid, var aid)
@@ -239,9 +240,16 @@ Rectangle {
         id: topBar
         anchors.top: parent.top
         anchors.left: parent.left
-        width: 52
+        width: parent.width
         height: 24
         z: 5
+
+        Components.HomeButton {
+            anchors.right: parent.right
+            anchors.rightMargin: 4
+            backgroundColor: Theme.withAlpha(Theme.bgSecondary, 0.88)
+            onClicked: detailPage.homeRequested()
+        }
 
         Rectangle {
             id: backBtn
@@ -2340,110 +2348,6 @@ Rectangle {
             onClicked: {
                 if (!favoritePickerDialog.contains(mapToItem(favoritePickerDialog, mouse.x, mouse.y))) {
                     detailPage.favoritePickerVisible = false
-                }
-            }
-        }
-    }
-
-    // ═══════════════════════════════════════════════════════════
-    // 下载进度遮罩
-    // ═══════════════════════════════════════════════════════════
-    Rectangle {
-        id: downloadProgressOverlay
-        anchors.fill: parent
-        color: Qt.rgba(0, 0, 0, 0.75)
-        visible: controller && controller.isDownloading
-        z: 100
-
-        Behavior on opacity { NumberAnimation { duration: 200 } }
-        opacity: visible ? 1 : 0
-
-        // 吞掉点击，避免穿透到下层页面；取消只通过下方按钮触发
-        MouseArea {
-            anchors.fill: parent
-        }
-
-        Column {
-            anchors.centerIn: parent
-            width: parent.width - 80
-            spacing: 8
-
-            Text {
-                text: controller ? controller.downloadStatus : "准备下载..."
-                color: "#FFFFFF"
-                font.family: Theme.fontFamily
-                font.pixelSize: 12
-                anchors.horizontalCenter: parent.horizontalCenter
-                wrapMode: Text.WordWrap
-                width: parent.width
-                horizontalAlignment: Text.AlignHCenter
-            }
-
-            Rectangle {
-                width: parent.width
-                height: 4
-                radius: 2
-                color: Qt.rgba(1, 1, 1, 0.3)
-
-                Rectangle {
-                    width: parent.width * (controller ? controller.downloadProgress : 0)
-                    height: parent.height
-                    radius: 2
-                    color: primaryColor
-                    Behavior on width { NumberAnimation { duration: 150 } }
-                }
-            }
-
-            // 与进度条拉开一点间距
-            Item { width: 1; height: 4 }
-
-            // 取消下载按钮（与工具行按钮同款：主题色胶囊 + 按下变深 + 缩放反馈）
-            Rectangle {
-                id: cancelDownloadBtn
-                anchors.horizontalCenter: parent.horizontalCenter
-                width: 100
-                height: 24
-                radius: 12
-                color: cancelDownloadArea.pressed ? primaryDark : primaryColor
-                scale: cancelDownloadArea.pressed ? 0.92 : 1.0
-                Behavior on scale { NumberAnimation { duration: 120; easing.type: Easing.OutCubic } }
-                Behavior on color { ColorAnimation { duration: 100 } }
-
-                Row {
-                    anchors.centerIn: parent
-                    spacing: 4
-
-                    Canvas {
-                        width: 11
-                        height: 11
-                        anchors.verticalCenter: parent.verticalCenter
-                        onPaint: {
-                            var ctx = getContext("2d");
-                            ctx.clearRect(0, 0, width, height);
-                            // 停止图标（方块）
-                            ctx.fillStyle = "white";
-                            ctx.beginPath();
-                            ctx.rect(1.5, 1.5, 8, 8);
-                            ctx.fill();
-                        }
-                    }
-
-                    Text {
-                        text: "取消下载"
-                        color: "white"
-                        font.family: Theme.fontFamily
-                        font.pixelSize: 8
-                        font.bold: true
-                        anchors.verticalCenter: parent.verticalCenter
-                    }
-                }
-
-                MouseArea {
-                    id: cancelDownloadArea
-                    anchors.fill: parent
-                    onClicked: {
-                        if (controller) controller.playback.cancelDownload();
-                    }
                 }
             }
         }

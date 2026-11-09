@@ -221,7 +221,7 @@ func printReadableCookies(loginResp *http.Response) {
 		}
 	}
 
-	fmt.Println("====================================================\n")
+	fmt.Print("====================================================\n\n")
 }
 
 func handlePull(w http.ResponseWriter, r *http.Request) {

@@ -49,6 +49,7 @@ Rectangle {
 
     // 播放清晰度（由详情页选择）
     property int playQualitySelected: 16
+    property var localPlaybackMedia: ({})
 
     // 首页列表滚动位置缓存（仅从详情页返回时恢复）
     property real homePopularX: 0
@@ -106,6 +107,7 @@ Rectangle {
 
     function applyPageProps(page, props) {
         if (!props) return
+        if (page === "player") localPlaybackMedia = props.localMedia || ({})
         if (page === "detail" && props.bvid) {
             detailSessionId = props.sessionId || nextDetailSessionId++
             detailBvid = props.bvid
@@ -203,6 +205,35 @@ Rectangle {
         pruneReportedDetailSessions()
         syncDetailCacheWithPageStack()
         pageTransition.restart();
+    }
+
+    function playDownloadedMedia(task) {
+        if (_animating || !task || task.state !== "complete") return
+        var media = controller.playback.localMediaSource(task.output || "")
+        if (!media.url) return
+        media.title = task.title || media.title
+        if (controller.useEmbeddedPlayer)
+            navigateTo("player", {localMedia: media})
+        else
+            controller.playback.launchLocalFile(media.path, media.title)
+    }
+
+    function goHome() {
+        if (_animating || currentPage === "home") return
+        captureCurrentDetailSnapshot()
+        _animating = true
+        lastPage = currentPage
+        restoreHomePopularOnShow = homeTabIndex === 0
+        currentPage = "home"
+        pageStack = []
+        pruneReportedDetailSessions()
+        syncDetailCacheWithPageStack()
+        searchSavedResultX = 0
+        if (controller && controller.search) {
+            var model = controller.search.searchModel()
+            if (model && model.clear) model.clear()
+        }
+        pageTransitionBack.restart()
     }
 
     function goBack() {
@@ -361,6 +392,7 @@ Rectangle {
             anchors.fill: parent
             sourceComponent: Component {
                 Pages.SearchPage {
+                    onHomeRequested: root.goHome()
                     controller: root.rootController
                     rootRef: root
                     onBackClicked: {
@@ -392,6 +424,7 @@ Rectangle {
             anchors.fill: parent
             sourceComponent: Component {
                 Pages.VideoDetailPage {
+                    onHomeRequested: root.goHome()
                     controller: root.rootController
                     bvid: root.detailBvid
                     detailSessionId: root.detailSessionId
@@ -424,6 +457,7 @@ Rectangle {
                 Pages.PlayerPage {
                     controller: root.rootController
                     playQuality: root.playQualitySelected
+                    localMedia: root.localPlaybackMedia
                     onBackClicked: root.goBack()
                 }
             }
@@ -436,6 +470,7 @@ Rectangle {
             anchors.fill: parent
             sourceComponent: Component {
                 Pages.CommentsPage {
+                    onHomeRequested: root.goHome()
                     controller: root.rootController
                     contextBvid: root.commentsBvid
                     contextOid: root.commentsOid
@@ -456,6 +491,7 @@ Rectangle {
             anchors.fill: parent
             sourceComponent: Component {
                 Pages.RankingPage {
+                    onHomeRequested: root.goHome()
                     controller: root.rootController
                     rootRef: root
                     onBackClicked: root.goBack()
@@ -480,6 +516,7 @@ Rectangle {
             anchors.fill: parent
             sourceComponent: Component {
                 Pages.DynamicPage {
+                    onHomeRequested: root.goHome()
                     controller: root.rootController
                     rootRef: root
                     onBackClicked: root.goBack()
@@ -512,6 +549,7 @@ Rectangle {
             anchors.fill: parent
             sourceComponent: Component {
                 Pages.DynamicDetailPage {
+                    onHomeRequested: root.goHome()
                     controller: root.rootController
                     dynamicData: root.dynamicDetailData
                     onBackClicked: root.goBack()
@@ -542,6 +580,8 @@ Rectangle {
             anchors.fill: parent
             sourceComponent: Component {
                 Pages.UserPage {
+                    onHomeRequested: root.goHome()
+                    onLocalPlaybackRequested: root.playDownloadedMedia(mediaTask)
                     controller: root.rootController
                     onBackClicked: root.goBack()
                     onVideoSelected: {
@@ -562,6 +602,7 @@ Rectangle {
             anchors.fill: parent
             sourceComponent: Component {
                 Pages.WatchLaterPage {
+                    onHomeRequested: root.goHome()
                     controller: root.rootController
                     rootRef: root
                     onBackClicked: root.goBack()
@@ -582,6 +623,7 @@ Rectangle {
             anchors.fill: parent
             sourceComponent: Component {
                 Pages.UpUserPage {
+                    onHomeRequested: root.goHome()
                     controller: root.rootController
                     rootRef: root
                     upMid: root.upUserMid
@@ -610,6 +652,7 @@ Rectangle {
             anchors.fill: parent
             sourceComponent: Component {
                 Pages.VideoSeasonPage {
+                    onHomeRequested: root.goHome()
                     controller: root.rootController
                     seasonMid: root.seasonMid
                     seasonId: root.seasonId

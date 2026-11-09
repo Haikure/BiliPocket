@@ -1,6 +1,7 @@
 #include "modules/up/BiliUpModule.h"
 #include "BiliAsyncUtils.hpp"
 #include "BiliController.h"
+#include "BiliDownloadQueue.h"
 #include "BiliJsonUtils.h"
 #include "BiliListFetch.hpp"
 #include "BiliModels.h"
@@ -40,22 +41,6 @@
 extern void bili_restartApiServerAsync(std::function<void(bool)> onFinished);
 
 namespace {
-
-// 校验 mp4/m4a 是否为有效容器（含 ftyp box），区分完整文件与中断残留半成品
-bool isValidMediaFile(const QString &path) {
-  QFile f(path);
-  if (!f.open(QIODevice::ReadOnly))
-    return false;
-  const QByteArray head = f.read(12);
-  if (head.size() < 12)
-    return false;
-  // MP4 容器：前 4 字节为 box size，随后 4 字节必须是 "ftyp"
-  if (head.mid(4, 4) != "ftyp")
-    return false;
-  const quint32 boxSize = qFromBigEndian<quint32>(
-      reinterpret_cast<const uchar *>(head.constData()));
-  return boxSize >= 12;
-}
 
 struct ParsedUpVideos {
   qint64 mid = 0;
@@ -1054,279 +1039,29 @@ void BiliUpModule::restartGoServer() {
 // ====== 下载到指定目录 ======
 
 void BiliUpModule::downloadVideoToDisk(int quality) {
-  if (m_controller->m_currentVideo.bvid.isEmpty() || m_controller->m_currentVideo.cid == 0) {
-    emit m_controller->toastMessage("视频信息不完整，无法下载");
+  if (m_controller->videoBvid().isEmpty() || m_controller->videoCid() <= 0) {
+    emit m_controller->toastMessage(QStringLiteral("视频信息不完整"));
     return;
   }
-
-  if (m_controller->m_isDownloading) {
-    emit m_controller->toastMessage("已有下载任务进行中");
-    return;
-  }
-
-  if (m_controller->m_playbackModule &&
-      m_controller->m_playbackModule->ensureDefaultSubtitleForCurrentVideo(
-          [self = QPointer<BiliUpModule>(this), quality]() {
-            if (!self) return;
-            self->downloadVideoToDisk(quality);
-          })) {
-    return;
-  }
-
-  const bool audioOnly = (quality == 0);
-  const int requestQuality = audioOnly ? 16 : qBound(16, quality, 127);
-  quality = requestQuality;
-
-  // 1. 定义存储目录并确保它存在
-  QString downloadDir = "/userdisk/Music/bili";
-  QDir dir(downloadDir);
-  if (!dir.exists()) {
-      if (!dir.mkpath(".")) {
-          emit m_controller->toastMessage("创建下载目录失败");
-          return;
-      }
-  }
-
-  // 2. 构建并净化文件名
+  // Freeze all task metadata now: navigating away must not change queued work.
   QString title = m_controller->videoTitle();
-
-  // 多P视频：选集标题前10字符 + ... + 当前P标题
   if (m_controller->m_videoPartModel && m_controller->m_videoPartModel->count() > 1) {
-      QString partTitle;
-      for (int i = 0; i < m_controller->m_videoPartModel->count(); ++i) {
-          QModelIndex idx = m_controller->m_videoPartModel->index(i, 0);
-          qint64 cid = m_controller->m_videoPartModel->data(idx, VideoPartListModel::CidRole).toLongLong();
-          if (cid == m_controller->m_currentVideo.cid) {
-              partTitle = m_controller->m_videoPartModel->data(idx, VideoPartListModel::PartRole).toString();
-              break;
-          }
+    for (int i = 0; i < m_controller->m_videoPartModel->count(); ++i) {
+      const auto index = m_controller->m_videoPartModel->index(i, 0);
+      if (m_controller->m_videoPartModel->data(index, VideoPartListModel::CidRole).toLongLong() == m_controller->videoCid()) {
+        title = title.left(10) + "..." + m_controller->m_videoPartModel->data(index, VideoPartListModel::PartRole).toString();
+        break;
       }
-      if (!partTitle.isEmpty()) {
-          QString collectionTitle = m_controller->videoTitle().left(10);
-          title = collectionTitle + "..." + partTitle;
-      }
+    }
   }
-
-  // 移除Windows和Linux文件名中的非法字符
-  title.remove(QRegExp("[/\\\\:*?\"<>|]"));
-  title = title.trimmed().left(100); // 限制文件名长度
-  if (title.isEmpty()) {
-      title = m_controller->m_currentVideo.bvid; // 如果标题为空，使用bvid作为备用
-  }
-  QString targetPath = dir.filePath(title + (audioOnly ? ".m4a" : ".mp4"));
-  // 非音频模式：DASH 双流，下载到 .m4s 后合并为最终 .mp4
-  QString videoPath = audioOnly ? QString() : dir.filePath(title + ".m4s");
-  QString audioPath = audioOnly ? QString() : dir.filePath(title + "_audio.m4s");
-  QString subtitleUrl;
-  QString subtitlePath;
-  if (m_controller->m_selectedSubtitleId > 0) {
-      subtitleUrl = m_controller->selectedSubtitleAssUrl();
-      subtitlePath = dir.filePath(QFileInfo(targetPath).completeBaseName() + ".ass");
-  }
-
-  // 3. 检查文件是否已存在
-  if (QFile::exists(targetPath)) {
-      // 校验文件有效性：中断合并可能残留损坏半成品，无效则删除后走断点续合/重下
-      if (!isValidMediaFile(targetPath)) {
-          QFile::remove(targetPath);
-          QFile::remove(targetPath + ".part");
-          // 不 return，落入下方断点续合/残留清理/重新下载流程
-      } else {
-          // 最终 mp4 已存在时，清理合并残留的 m4s（取消/中断合并可能留下）
-          if (!audioOnly) {
-              if (QFile::exists(videoPath)) QFile::remove(videoPath);
-              if (QFile::exists(audioPath)) QFile::remove(audioPath);
-          }
-          if (!subtitleUrl.isEmpty() && !subtitlePath.isEmpty() && !QFile::exists(subtitlePath)) {
-              m_controller->m_isDownloading = true;
-              m_controller->m_downloadProgress = 0;
-              m_controller->m_downloadStatus = "正在保存字幕...";
-              emit m_controller->downloadStateChanged();
-
-              QPointer<BiliController> self(m_controller);
-              m_controller->m_network->downloadVideo(
-                  subtitleUrl, subtitlePath,
-                  [self, subtitlePath](const QString &) {
-                    if (!self) return;
-                    self->m_isDownloading = false;
-                    self->m_downloadProgress = 1.0;
-                    self->m_downloadStatus = "字幕保存完成";
-                    emit self->downloadStateChanged();
-                    emit self->toastMessage("字幕下载完成: " + subtitlePath);
-                  },
-                  [self](int, const QString &msg) {
-                    if (!self) return;
-                    self->m_isDownloading = false;
-                    self->m_downloadProgress = 0;
-                    self->m_downloadStatus.clear();
-                    emit self->downloadStateChanged();
-                    emit self->toastMessage("字幕下载失败: " + msg);
-                  },
-                  nullptr, QStringLiteral("subtitle"));
-              return;
-          }
-          emit m_controller->toastMessage("文件已存在");
-          return;
-      }
-  }
-
-  // 断点续合：两个 m4s 都在而最终 mp4 不存在（上次合并失败/中断）→ 直接合并
-  if (!audioOnly && !QFile::exists(targetPath) &&
-      QFile::exists(videoPath) && QFile::exists(audioPath)) {
-      m_controller->setIsLoading(true);
-      m_controller->mergeM4sPair(videoPath, audioPath, targetPath,
-                                 QStringLiteral("下载完成: "),
-                                 QStringLiteral("合并失败: "),
-                                 subtitleUrl, subtitlePath);
-      return;
-  }
-  // 残留清理：只存在其中一个 m4s，删掉后重新下载
-  if (!audioOnly) {
-      if (QFile::exists(videoPath)) QFile::remove(videoPath);
-      if (QFile::exists(audioPath)) QFile::remove(audioPath);
-  }
-
-  // 先置位下载状态，防止连点并发写同一组 m4s；失败回调负责复位
-  m_controller->m_isDownloading = true;
-  m_controller->m_downloadStatus = "正在获取下载地址...";
-  emit m_controller->downloadStateChanged();
-
-  // 开启"优先播放MP4流"且非纯音频时，先请求 MP4（fnval=1），不可用再回退 DASH（fnval=4048）
-  const bool preferMp4 = m_controller->m_preferMp4Stream && !audioOnly;
-  fetchDownloadPlayUrl(requestQuality, audioOnly, preferMp4 ? 1 : 4048, preferMp4,
-                       targetPath, videoPath, audioPath, subtitleUrl, subtitlePath);
-}
-
-void BiliUpModule::fetchDownloadPlayUrl(int requestQuality, bool audioOnly, int fnval,
-                                        bool allowDashFallback,
-                                        const QString &targetPath, const QString &videoPath,
-                                        const QString &audioPath, const QString &subtitleUrl,
-                                        const QString &subtitlePath) {
-  const int quality = audioOnly ? 0 : requestQuality;
-  m_controller->setIsLoading(true);
-
-  QMap<QString, QString> params;
-  params["aid"] = QString::number(m_controller->videoAid());
-  params["cid"] = QString::number(m_controller->m_currentVideo.cid);
-  params["qn"] = QString::number(requestQuality);
-  params["bvid"] = m_controller->m_currentVideo.bvid;
-  // fnval=1: MP4 格式（仅 H.264），单文件直接落盘无需合并；fnval=4048: DASH 双流，下载后本地合并
-  params["fnval"] = QString::number(fnval);
-
-  QPointer<BiliController> self(m_controller);
-
-  m_controller->m_network->get(
-      "/video/playurl", params,
-      [moduleSelf = QPointer<BiliUpModule>(this), self, targetPath, videoPath, audioPath,
-       quality, requestQuality, audioOnly, subtitleUrl, subtitlePath, fnval,
-       allowDashFallback](const QJsonObject &data) {
-        if (!moduleSelf || !self) return;
-
-        // MP4 优先：有 durl 直接单文件下载（不产生 m4s、不合并），否则回退 DASH
-        if (!audioOnly && fnval == 1) {
-          const QString mp4Url = self->pickMp4Url(data);
-          if (!mp4Url.isEmpty()) {
-            int apiQuality = data.value("quality").toInt(0);
-            // 请求的清晰度没有 MP4 流时，API 会静默降级返回更低的 MP4（如请求 1080P 返回 720P）。
-            // 此时视为"未找到 MP4 流"，回退 DASH 以获取目标清晰度，避免下载被降级。
-            if (allowDashFallback && apiQuality > 0 && apiQuality < requestQuality) {
-              self->setIsLoading(false);
-              moduleSelf->fetchDownloadPlayUrl(requestQuality, false, 4048, false,
-                                               targetPath, videoPath, audioPath,
-                                               subtitleUrl, subtitlePath);
-              return;
-            }
-            int finalQuality = requestQuality;
-            if (apiQuality > 0) {
-              finalQuality = apiQuality;
-            }
-            self->m_downloadStatus = "准备下载...";
-            emit self->downloadStateChanged();
-            emit self->toastMessage("开始下载...");
-            self->startDownloadTask(mp4Url, QString(), targetPath, QString(),
-                                    finalQuality,
-                                    QStringLiteral("下载完成: "),
-                                    QStringLiteral("下载失败: "),
-                                    subtitleUrl, subtitlePath,
-                                    QString());
-            return;
-          }
-          if (allowDashFallback) {
-            // 先平衡本次请求的 loading 计数，再发起 DASH 回退请求（下载状态已置位，无需重复）
-            self->setIsLoading(false);
-            moduleSelf->fetchDownloadPlayUrl(requestQuality, false, 4048, false,
-                                             targetPath, videoPath, audioPath,
-                                             subtitleUrl, subtitlePath);
-            return;
-          }
-          emit self->toastMessage("未获取到下载地址");
-          // 入口已置位下载状态，提前返回需复位
-          self->m_isDownloading = false;
-          self->m_downloadProgress = 0;
-          self->m_downloadStatus.clear();
-          emit self->downloadStateChanged();
-          self->setIsLoading(false);
-          return;
-        }
-
-        // 仅用 DASH（fnval=4048）响应刷新可用清晰度：MP4（fnval=1）响应只含 MP4 支持的
-        // 子集清晰度，用它刷新会把完整列表（如 1080P）冲掉，导致列表在播放/下载瞬间缩水。
-        self->updateAcceptQualities(data);
-
-        QString downloadUrl;
-        QString dashAudioUrl;
-        int finalQuality = quality;
-        if (audioOnly) {
-          downloadUrl = self->pickDashUrls(data, requestQuality).audioUrl;
-        } else {
-          auto dash = self->pickDashUrls(data, requestQuality);
-          downloadUrl = dash.videoUrl;
-          dashAudioUrl = dash.audioUrl;
-          finalQuality = dash.finalQuality;
-        }
-
-        if (downloadUrl.isEmpty()) {
-          emit self->toastMessage(audioOnly ? "未获取到音频下载地址" : "未获取到下载地址");
-          // 入口已置位下载状态，提前返回需复位
-          self->m_isDownloading = false;
-          self->m_downloadProgress = 0;
-          self->m_downloadStatus.clear();
-          emit self->downloadStateChanged();
-          self->setIsLoading(false);
-          return;
-        }
-        if (!audioOnly && dashAudioUrl.isEmpty()) {
-          emit self->toastMessage("未获取到音频流，无法合并");
-          // 同上，复位
-          self->m_isDownloading = false;
-          self->m_downloadProgress = 0;
-          self->m_downloadStatus.clear();
-          emit self->downloadStateChanged();
-          self->setIsLoading(false);
-          return;
-        }
-
-        self->m_downloadStatus = audioOnly ? "准备下载音频..." : "准备下载...";
-        emit self->downloadStateChanged();
-        emit self->toastMessage(audioOnly ? "开始下载音频..." : "开始下载...");
-
-        self->startDownloadTask(downloadUrl, dashAudioUrl,
-                                audioOnly ? targetPath : videoPath,
-                                audioPath,
-                                audioOnly ? 0 : finalQuality,
-                                audioOnly ? QStringLiteral("音频下载完成: ") : QStringLiteral("下载完成: "),
-                                audioOnly ? QStringLiteral("音频下载失败: ") : QStringLiteral("下载失败: "),
-                                subtitleUrl, subtitlePath,
-                                audioOnly ? QString() : targetPath);
-      },
-      [self](int, const QString &msg) {
-        if (!self) return;
-        // 复位入口置位的下载状态
-        self->m_isDownloading = false;
-        self->m_downloadProgress = 0;
-        self->m_downloadStatus.clear();
-        emit self->downloadStateChanged();
-        self->setIsLoading(false);
-        emit self->toastMessage("获取下载地址失败: " + msg);
-      });
+  BiliDownloadQueue::instance()->enqueue({
+      {"aid", double(m_controller->videoAid())},
+      {"cid", double(m_controller->videoCid())},
+      {"bvid", m_controller->videoBvid()},
+      {"title", title},
+      {"cover", m_controller->videoPic()},
+      {"quality", quality},
+      {"preferMp4", m_controller->m_preferMp4Stream},
+      {"defaultSubtitle", m_controller->m_defaultSubtitleEnabled && !m_controller->m_subtitleSelectionOverridden},
+      {"subtitle", m_controller->selectedSubtitleAssUrl()}});
 }

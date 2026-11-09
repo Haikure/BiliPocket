@@ -32,6 +32,7 @@ Rectangle {
     readonly property bool upDynamicMode: controller && controller.upSelectedDynamic
 
     signal backClicked()
+    signal homeRequested()
     signal videoSelected(string bvid)
     signal dynamicSelected(var dynamicData)
 
@@ -463,6 +464,7 @@ Rectangle {
         showBack: true
         anchors.top: parent.top
         onBackClicked: upPage.backClicked()
+        onHomeClicked: upPage.homeRequested()
     }
 
     Flickable {

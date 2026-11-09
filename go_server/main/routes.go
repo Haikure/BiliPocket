@@ -18,6 +18,7 @@ func setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/video/relation", handleVideoRelation)
 	mux.HandleFunc("/video/playurl", handleVideoPlayurl)
 	mux.HandleFunc("/video/merge", handleVideoMerge)
+	mux.HandleFunc("/downloads", handleDownloads)
 	mux.HandleFunc("/video/player/info", handleVideoPlayerInfo)
 	mux.HandleFunc("/video/danmaku", handleVideoDanmaku)
 	mux.HandleFunc("/video/danmaku/config", handleVideoDanmakuConfig)

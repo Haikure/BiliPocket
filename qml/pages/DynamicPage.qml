@@ -18,6 +18,7 @@ Rectangle {
     readonly property bool imagesActive: visible
 
     signal backClicked()
+    signal homeRequested()
     signal videoSelected(string bvid)
     signal dynamicSelected(var dynamicData)
 
@@ -189,6 +190,15 @@ Rectangle {
         onLoadMoreRequested: {
             if (controller && controller.feed) controller.feed.fetchMoreDynamic()
         }
+    }
+
+    Components.HomeButton {
+        anchors.right: parent.right
+        anchors.rightMargin: 4
+        anchors.top: parent.top
+        z: 20
+        backgroundColor: Theme.withAlpha(Theme.bgSecondary, 0.88)
+        onClicked: dynamicPage.homeRequested()
     }
 
     Rectangle {

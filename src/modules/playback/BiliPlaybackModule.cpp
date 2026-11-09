@@ -1,5 +1,6 @@
 #include "modules/playback/BiliPlaybackModule.h"
 #include "BiliController.h"
+#include "BiliDownloadQueue.h"
 #include "BiliJsonUtils.h"
 #include "BiliModels.h"
 #include "BiliNetwork.h"
@@ -331,18 +332,7 @@ void BiliPlaybackModule::fetchAcceptQualities(int quality) {
 // ====== 取消下载 ======
 
 void BiliPlaybackModule::cancelDownload() {
-  if (!m_controller->m_isDownloading)
-    return;
-
-  // 先置位取消状态再 abort：abort() 同步触发 onError，否则取消会被误判为失败
-  m_controller->m_isDownloading = false;
-  m_controller->m_downloadProgress = 0;
-  m_controller->m_downloadStatus = "正在取消...";
-  emit m_controller->downloadStateChanged();
-
-  m_controller->m_network->cancelVideoDownload();
-
-  emit m_controller->toastMessage("正在取消下载...");
+  BiliDownloadQueue::instance()->pauseAll();
 }
 
 void BiliPlaybackModule::cleanupTempSubtitle() {
@@ -464,6 +454,39 @@ bool BiliPlaybackModule::startExternalPlayer(const QStringList &args) {
   m_controller->m_externalPlayerProcess = process;
   process->start();
   return true;
+}
+
+QVariantMap BiliPlaybackModule::localMediaSource(const QString &path) {
+  const QFileInfo file(path.startsWith("file:") ? QUrl(path).toLocalFile() : path);
+  if (!file.isAbsolute() || !file.isFile()) {
+    emit m_controller->toastMessage(QStringLiteral("本地文件不存在或已被移动"));
+    return {};
+  }
+  if (!file.isReadable() || file.size() <= 0) {
+    emit m_controller->toastMessage(QStringLiteral("本地文件无法读取或为空"));
+    return {};
+  }
+  QVariantMap media{{"path", file.absoluteFilePath()},
+                   {"url", QUrl::fromLocalFile(file.absoluteFilePath()).toString(QUrl::FullyEncoded)},
+                   {"title", file.completeBaseName()}};
+  const QFileInfo subtitle(file.dir().filePath(file.completeBaseName() + ".ass"));
+  if (subtitle.isFile() && subtitle.isReadable() && subtitle.size() > 0) {
+    media.insert("subtitlePath", subtitle.absoluteFilePath());
+    media.insert("subtitleUrl", QUrl::fromLocalFile(subtitle.absoluteFilePath()).toString(QUrl::FullyEncoded));
+  }
+  return media;
+}
+
+bool BiliPlaybackModule::launchLocalFile(const QString &path, const QString &title) {
+  const auto media = localMediaSource(path);
+  if (media.isEmpty()) return false;
+  // Local files have their own title and subtitle. Never reuse another video's
+  // online resume offset, selected subtitle, or heartbeat identifiers.
+  QStringList args;
+  args << ("--force-media-title=" + (title.trimmed().isEmpty() ? media.value("title").toString() : title));
+  if (media.contains("subtitlePath")) args << ("--sub-file=" + media.value("subtitlePath").toString());
+  args << "--" << media.value("path").toString();
+  return startExternalPlayer(args);
 }
 
 void BiliPlaybackModule::launchExternalPlayer(const QString &path) {

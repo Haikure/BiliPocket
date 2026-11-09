@@ -52,6 +52,7 @@ public:
 
   // 未就绪时 get() 请求进入队列，就绪后自动发出（仅主线程调用）
   void setApiServerReady(bool ready);
+  bool apiServerReady() const { return m_apiServerReady; }
 
   // 主 Go 请求的故障识别；直连 POST 也复用这组入口。
   static constexpr int ApiServerExitedError = -18;
@@ -72,6 +73,7 @@ signals:
   void apiServerExited();
   void apiServerRecovered();
   void apiServerRestartFailed();
+  void apiServerReadyChanged();
 
 private:
   friend class BiliNetworkTest;
@@ -112,13 +114,13 @@ private:
     QMap<QString, QString> params;
     SuccessCallback onSuccess;
     ErrorCallback onError;
+    int timeoutMs = 0;
   };
-  bool m_apiServerReady = true;
+  bool m_apiServerReady = false;
   QVector<PendingRequest> m_pendingRequests;
   static constexpr int MAX_PENDING_REQUESTS = 32;
-  // 关闸兜底：上游 bring-up 若因重入/销毁丢了完成回调，闸门会永远关着，
-  // 表现为界面一直"加载中"且一个请求都不发。超时后强制放行。
-  // 必须大于 bring-up 看门狗(45s)，否则慢启动会被提前开闸、请求白白失败。
+  // 启动超时则报错并清空待发请求；服务确认就绪前绝不放行。
+  // 必须大于启动看门狗(45s)，避免慢启动被提前判为失败。
   int m_readyGateGeneration = 0;
   static constexpr int READY_GATE_TIMEOUT_MS = 60000;
 

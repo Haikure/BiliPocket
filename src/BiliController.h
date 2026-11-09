@@ -76,6 +76,8 @@ class BiliController : public QObject {
   Q_PROPERTY(QString videoDuration READ videoDuration NOTIFY videoDetailChanged)
   Q_PROPERTY(QString playbackProgressText READ playbackProgressText NOTIFY playbackProgressChanged)
   Q_PROPERTY(int playbackProgressSeconds READ playbackProgressSeconds NOTIFY playbackProgressChanged)
+  Q_PROPERTY(int videoDurationSeconds READ videoDurationSeconds NOTIFY videoDetailChanged)
+  Q_PROPERTY(QObject *downloadQueue READ downloadQueue CONSTANT)
   Q_PROPERTY(QString videoBvid READ videoBvid NOTIFY videoDetailChanged)
   Q_PROPERTY(qint64 videoCid READ videoCid NOTIFY videoDetailChanged)
   Q_PROPERTY(qint64 videoAid READ videoAid NOTIFY videoDetailChanged)
@@ -92,10 +94,6 @@ class BiliController : public QObject {
   Q_PROPERTY(int playQuality READ playQuality NOTIFY playUrlChanged)
   Q_PROPERTY(QVariantList acceptQualities READ acceptQualities NOTIFY acceptQualitiesChanged)
 
-  // 下载状态
-  Q_PROPERTY(bool isDownloading READ isDownloading NOTIFY downloadStateChanged)
-  Q_PROPERTY(double downloadProgress READ downloadProgress NOTIFY downloadStateChanged)
-  Q_PROPERTY(QString downloadStatus READ downloadStatus NOTIFY downloadStateChanged)
   Q_PROPERTY(QString dashVideoUrl READ dashVideoUrl NOTIFY playUrlChanged)
   Q_PROPERTY(QString dashAudioUrl READ dashAudioUrl NOTIFY playUrlChanged)
   Q_PROPERTY(QVariantList subtitleList READ subtitleList NOTIFY subtitleListChanged)
@@ -190,6 +188,8 @@ public:
   QString videoDuration() const;
   QString playbackProgressText() const;
   int playbackProgressSeconds() const { return m_playbackProgressSeconds; }
+  int videoDurationSeconds() const { return m_currentVideo.duration; }
+  QObject *downloadQueue() const;
   QString videoBvid() const;
   qint64 videoCid() const;
   qint64 videoAid() const;
@@ -206,9 +206,6 @@ public:
   QVariantList acceptQualities() const;
   QVector<int> acceptQualityValues() const { return m_acceptQualities; }
 
-  bool isDownloading() const { return m_isDownloading; }
-  double downloadProgress() const { return m_downloadProgress; }
-  QString downloadStatus() const { return m_downloadStatus; }
   QString dashVideoUrl() const { return m_dashVideoUrl; }
   QString dashAudioUrl() const { return m_dashAudioUrl; }
   QVariantList subtitleList() const;
@@ -360,7 +357,6 @@ signals:
   void qrcodeLoginSuccess();
   void qrcodeNeedRefresh();
   void playbackReady(const QString &url);
-  void downloadStateChanged();
   void favoriteStatusChanged();
   void coinStatusChanged();
   void likeStatusChanged();
@@ -439,10 +435,6 @@ private:
   int m_playQuality;
   QVector<int> m_acceptQualities;
 
-  // 下载状态
-  bool m_isDownloading;
-  double m_downloadProgress;
-  QString m_downloadStatus;
   QString m_tempSubtitlePath;
   QString m_dashVideoUrl;
   QString m_dashAudioUrl;
@@ -576,23 +568,6 @@ private:
   DashResult pickDashUrls(const QJsonObject &data, int requestedQuality) const;
   QString pickMp4Url(const QJsonObject &data) const;
 
-  void startDownloadTask(const QString &videoUrl, const QString &audioUrl,
-                         const QString &videoPath, const QString &audioPath,
-                         int finalQuality,
-                         const QString &successToastPrefix = QString(),
-                         const QString &errorToastPrefix = QStringLiteral("下载失败："),
-                         const QString &subtitleUrl = QString(),
-                         const QString &subtitlePath = QString(),
-                         const QString &finalOutputPath = QString());
-
-  // 下载完成收尾：可选保存字幕，然后置状态并 toast
-  void finishDownloadSuccess(const QString &path, const QString &successToastPrefix,
-                             const QString &subtitleUrl, const QString &subtitlePath);
-  // 合并两个 m4s 为最终 mp4；失败保留 m4s 以便重试
-  void mergeM4sPair(const QString &videoPath, const QString &audioPath,
-                    const QString &outputPath, const QString &successToastPrefix,
-                    const QString &errorToastPrefix, const QString &subtitleUrl,
-                    const QString &subtitlePath);
 
   // 标记对象是否正在销毁
   bool m_destroying;

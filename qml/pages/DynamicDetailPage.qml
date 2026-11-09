@@ -16,6 +16,7 @@ Rectangle {
     property bool imageFullscreenVisible: false
 
     signal backClicked()
+    signal homeRequested()
     signal videoSelected(string bvid)
     signal upRequested(var mid)
     signal commentsRequested(var context)
@@ -107,6 +108,7 @@ Rectangle {
         showBack: true
         anchors.top: parent.top
         onBackClicked: detailPage.backClicked()
+        onHomeClicked: detailPage.homeRequested()
     }
 
     Flickable {

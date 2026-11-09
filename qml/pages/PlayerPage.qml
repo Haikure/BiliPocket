@@ -15,6 +15,10 @@ Rectangle {
 
     property var controller: null
     property int playQuality: 16
+    property var localMedia: ({})
+    readonly property bool localMode: !!localMedia.url
+    property bool localAutoStarted: false
+    readonly property string mediaTitle: localMode ? (localMedia.title || "本地媒体") : (controller ? controller.videoTitle : "")
     signal backClicked()
 
     property bool controlsVisible: true
@@ -66,6 +70,12 @@ Rectangle {
         }
     }
 
+    function autoPlayLocal() {
+        if (!localMode || localAutoStarted || !visible || (embeddedMode && !embeddedPlayer)) return
+        localAutoStarted = true
+        requestPlayback()
+    }
+
     function requestPlayback() {
         if (!controller) return
         if (embeddedMode && embeddedPlayer && embeddedPlayer.sessionActive
@@ -74,13 +84,30 @@ Rectangle {
             restartControlsTimer()
             return
         }
-        if (controller.isLoading || launchRequested || embeddedBusy) return
+        if ((!localMode && controller.isLoading) || launchRequested || embeddedBusy) return
         if (controller.playback.externalPlayerRunning()) {
             controller.toastMessage("播放器已在运行，请先关闭当前窗口")
             return
         }
         if (embeddedMode && !embeddedPlayer) return
         playbackError = ""
+        if (localMode) {
+            var media = controller.playback.localMediaSource(localMedia.path)
+            if (!media.url) {
+                playbackError = "本地文件不可用，可能已移动或删除"
+                return
+            }
+            if (embeddedMode) {
+                controller.playback.cancelEmbeddedPlayback()
+                embeddedPlayer.openSelection(media.url, "", media.subtitleUrl || "", 0)
+            } else {
+                playbackStarted = controller.playback.launchLocalFile(media.path, mediaTitle)
+                if (!playbackStarted) playbackError = "本地播放器启动失败"
+            }
+            restartControlsTimer()
+            playPauseIcon.refresh()
+            return
+        }
         launchRequested = true
         if (controller.playUrl && controller.playUrl.length > 0 && controller.playQuality === playQuality)
             startSelection()
@@ -108,12 +135,12 @@ Rectangle {
     Connections {
         target: controller
         function onPlaybackReady(url) {
-            if (!launchRequested || !url || url.length === 0 || !controller) return
+            if (localMode || !launchRequested || !url || url.length === 0 || !controller) return
             startSelection()
         }
         function onIsLoadingChanged() {
             // Failed or cancelled URL requests must allow another attempt.
-            if (controller && !controller.isLoading && launchRequested) {
+            if (!localMode && controller && !controller.isLoading && launchRequested) {
                 Qt.callLater(function() {
                     if (controller && !controller.isLoading) launchRequested = false
                 })
@@ -124,11 +151,12 @@ Rectangle {
     Connections {
         target: controller ? controller.playback : null
         function onEmbeddedPlaybackReady(videoUrl, audioUrl, subtitleUrl, startSeconds) {
-            if (!preparingEmbedded || !embeddedMode || !embeddedPlayer) return
+            if (localMode || !preparingEmbedded || !embeddedMode || !embeddedPlayer) return
             embeddedPlayer.openSelection(videoUrl, audioUrl, subtitleUrl, startSeconds)
             preparingEmbedded = false
         }
         function onEmbeddedPlaybackFailed(message) {
+            if (localMode) return
             preparingEmbedded = false
             playbackError = message
             controlsVisible = true
@@ -150,7 +178,7 @@ Rectangle {
             if (controller) controller.toastMessage("字幕加载失败：" + message)
         }
         function onProgressReport(position, duration, finished) {
-            if (controller) controller.playback.reportEmbeddedProgress(position, duration, finished)
+            if (!localMode && controller) controller.playback.reportEmbeddedProgress(position, duration, finished)
         }
         function onPlayingChanged() {
             playPauseIcon.refresh()
@@ -173,13 +201,13 @@ Rectangle {
 
         Image {
             anchors.fill: parent
-            source: controller && controller.videoPic
+            source: !localMode && controller && controller.videoPic
                     ? "image://bili/size/640x320/" + encodeURIComponent(controller.videoPic)
                     : ""
             fillMode: Image.PreserveAspectCrop
             asynchronous: true
             opacity: 1
-            visible: controller && controller.videoPic && controller.videoPic.length > 0
+            visible: !localMode && controller && controller.videoPic && controller.videoPic.length > 0
                      && !embeddedPlayer
         }
 
@@ -189,15 +217,22 @@ Rectangle {
             active: playerPage.embeddedMode
             source: active ? "../components/EmbeddedPlayer.qml" : ""
             onLoaded: {
+                item.initialPosition = Qt.binding(function() {
+                    return !playerPage.localMode && controller ? Math.max(0, controller.playbackProgressSeconds) : 0
+                })
+                item.initialDuration = Qt.binding(function() {
+                    return !playerPage.localMode && controller ? Math.max(0, controller.videoDurationSeconds) : 0
+                })
                 item.preparingPlayback = Qt.binding(function() { return playerPage.launchRequested || playerPage.preparingEmbedded })
                 item.displayTitle = Qt.binding(function() {
-                    return controller ? controller.videoTitle : ""
+                    return playerPage.mediaTitle
                 })
                 item.coverSource = Qt.binding(function() {
-                    return controller && controller.videoPic
+                    return !playerPage.localMode && controller && controller.videoPic
                             ? "image://bili/size/640x320/" + encodeURIComponent(controller.videoPic) : ""
                 })
                 item.showCover = Qt.binding(function() { return !playerPage.playbackStarted })
+                Qt.callLater(playerPage.autoPlayLocal)
             }
             onStatusChanged: {
                 if (status === Loader.Error) {
@@ -350,7 +385,7 @@ Rectangle {
             }
 
             Text {
-                text: controller ? controller.videoTitle : ""
+                text: playerPage.mediaTitle
                 color: "#FFFFFF"
                 font.family: Theme.fontFamily
                 font.pixelSize: 13
@@ -583,12 +618,13 @@ Rectangle {
 
     Component.onCompleted: {
         restartControlsTimer();
-        if (controller) controller.video.reportCurrentVideoAsRecentViewIfNeeded();
+        if (localMode) Qt.callLater(autoPlayLocal)
+        else if (controller) controller.video.reportCurrentVideoAsRecentViewIfNeeded();
     }
 
     Component.onDestruction: {
         stopPlayback();
-        if (controller) controller.playback.cleanupTempSubtitle();
+        if (!localMode && controller) controller.playback.cleanupTempSubtitle();
     }
 
     onVisibleChanged: if (!visible) stopPlayback()

@@ -14,6 +14,7 @@ Rectangle {
     property var rootRef: null
 
     signal backClicked()
+    signal homeRequested()
     signal videoSelected(string bvid)
 
     // 虚拟键盘弹层
@@ -81,7 +82,7 @@ Rectangle {
             // ── 搜索输入框 ──
             Rectangle {
                 id: searchInputBox
-                width: parent.width - 36 - 52 - 18
+                width: parent.width - 36 - 52 - 32 - 18
                 height: 30
                 radius: 15
                 anchors.verticalCenter: parent.verticalCenter
@@ -211,6 +212,14 @@ Rectangle {
                     onClicked: doSearch()
                 }
             }
+        }
+
+        Components.HomeButton {
+            anchors.right: parent.right
+            anchors.rightMargin: 6
+            anchors.verticalCenter: parent.verticalCenter
+            height: 36
+            onClicked: searchPage.homeRequested()
         }
 
         // 底部分隔线

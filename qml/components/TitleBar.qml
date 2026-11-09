@@ -13,10 +13,13 @@ Rectangle {
     property string titleSuffix: ""
     property bool showBack: true
     property bool showSearch: false
-    property int titleSideReserve: 55
+    property bool showHome: true
+    property int titleSideReserve: showSearch && showHome ? 76 : 55
+    property int titleRightReserve: titleSideReserve
 
     signal backClicked()
     signal searchClicked()
+    signal homeClicked()
 
     // ── 返回按钮 ──
     Rectangle {
@@ -71,8 +74,9 @@ Rectangle {
     // ── 标题 ──
     Row {
         id: titleGroup
-        property int maxWidth: Math.max(0, parent.width - titleBar.titleSideReserve * 2)
-        anchors.centerIn: parent
+        property int maxWidth: Math.max(0, parent.width - titleBar.titleSideReserve - titleBar.titleRightReserve)
+        anchors.verticalCenter: parent.verticalCenter
+        x: titleBar.titleSideReserve + (maxWidth - width) / 2
         width: Math.min(maxWidth, titleText.implicitWidth + (suffixText.visible ? spacing + suffixText.implicitWidth : 0))
         height: parent.height
         spacing: suffixText.visible ? 4 : 0
@@ -109,6 +113,7 @@ Rectangle {
         height: parent.height
         color: "transparent"
         anchors.right: parent.right
+        anchors.rightMargin: titleBar.showHome ? 36 : 0
         anchors.verticalCenter: parent.verticalCenter
 
         Rectangle {
@@ -146,6 +151,15 @@ Rectangle {
             anchors.fill: parent
             onClicked: titleBar.searchClicked()
         }
+    }
+
+    HomeButton {
+        anchors.right: parent.right
+        anchors.rightMargin: 4
+        anchors.verticalCenter: parent.verticalCenter
+        height: parent.height
+        visible: titleBar.showHome
+        onClicked: titleBar.homeClicked()
     }
 
     // ── 底部分割线 + 微光效果 ──

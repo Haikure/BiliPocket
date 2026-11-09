@@ -2,6 +2,8 @@
 
 set -euo pipefail
 
+export GOTOOLCHAIN="${GOTOOLCHAIN:-go1.27.3}"
+
 # 获取脚本所在目录并进入
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"

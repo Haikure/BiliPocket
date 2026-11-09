@@ -295,7 +295,13 @@ void BiliNetwork::finishApiServerRestart(bool ok) {
     emit apiServerRecovered();
   else
     emit apiServerRestartFailed();
-  setApiServerReady(true);
+  if (ok) {
+    setApiServerReady(true);
+  } else {
+    const auto pending = std::move(m_pendingRequests);
+    m_pendingRequests.clear();
+    for (const auto &request : pending) if (request.onError) request.onError(-18, QStringLiteral("Go 服务启动失败，请重试"));
+  }
 }
 
 void BiliNetwork::resetApiServerState() {
@@ -355,6 +361,7 @@ void BiliNetwork::setApiServerReady(bool ready) {
     return;
   }
   m_apiServerReady = ready;
+  emit apiServerReadyChanged();
   if (ready) {
     flushPendingRequests();
     return;
@@ -368,9 +375,8 @@ void BiliNetwork::setApiServerReady(bool ready) {
     if (m_apiServerReady || m_readyGateGeneration != generation) {
       return;
     }
-    qWarning() << "[BiliNet] API ready gate timed out, force reopening";
-    m_apiServerReady = true;
-    flushPendingRequests();
+    qWarning() << "[BiliNet] API startup timed out";
+    finishApiServerRestart(false);
   });
 }
 
@@ -386,7 +392,7 @@ void BiliNetwork::flushPendingRequests() {
     current.append(m_pendingRequests.takeFirst());
   }
   for (PendingRequest &req : current) {
-    get(req.path, req.params, std::move(req.onSuccess), std::move(req.onError));
+    get(req.path, req.params, std::move(req.onSuccess), std::move(req.onError), req.timeoutMs);
   }
   if (!m_pendingRequests.isEmpty()) {
     QTimer::singleShot(400, this, [this]() { flushPendingRequests(); });
@@ -433,7 +439,7 @@ void BiliNetwork::get(const QString &path, const QMap<QString, QString> &params,
       return;
     }
     m_pendingRequests.append(
-        {path, params, std::move(onSuccess), std::move(onError)});
+        {path, params, std::move(onSuccess), std::move(onError), timeoutMs});
     return;
   }
 
@@ -613,8 +619,7 @@ void BiliNetwork::downloadVideo(const QString &url, const QString &targetPath,
 
   QNetworkRequest request(downloadUrl);
   applyCommonHeaders(request);
-  // 弱网卡顿时 10s 空闲超时会误杀下载，改为 300s（与下方总超时 QTimer 一致）
-  request.setTransferTimeout(300000);
+  request.setTransferTimeout(30000);
 
   QNetworkReply *reply = m_nam->get(request);
   if (!reply) {
@@ -663,7 +668,9 @@ void BiliNetwork::downloadVideo(const QString &url, const QString &targetPath,
 
   // 在数据可读时写入文件；写失败立即中止下载
   auto writeFailed = std::make_shared<bool>(false);
-  connect(reply, &QNetworkReply::readyRead, [file, reply, writeFailed]() {
+  QTimer *timer = new QTimer(reply);
+  timer->setSingleShot(true);
+  connect(reply, &QNetworkReply::readyRead, [file, reply, writeFailed, timer]() {
     if (*writeFailed || !file || !file->isOpen() || !reply) {
         return;
     }
@@ -674,6 +681,7 @@ void BiliNetwork::downloadVideo(const QString &url, const QString &targetPath,
     if (data.isEmpty()) {
         return;
     }
+    timer->start(30000);
     const qint64 written = file->write(data);
     if (written != data.size() || file->error() != QFileDevice::NoError) {
         *writeFailed = true;
@@ -683,18 +691,14 @@ void BiliNetwork::downloadVideo(const QString &url, const QString &targetPath,
   });
 
   QPointer<QNetworkReply> safeReply(reply);
-  QTimer *timer = new QTimer(this);
-  timer->setSingleShot(true);
-  connect(timer, &QTimer::timeout, this, [safeReply, timer]() {
+  connect(timer, &QTimer::timeout, this, [safeReply]() {
     if (safeReply && safeReply->isRunning()) {
       safeReply->setProperty(kRequestTimedOut, true);
       safeReply->abort();
     }
-    timer->disconnect();
-    timer->deleteLater();
   });
-  // 视频下载超时时间设为 5 分钟
-  timer->start(300000);
+  // A byte-idle timeout permits arbitrarily large downloads.
+  timer->start(30000);
 
   connect(reply, &QNetworkReply::finished, this,
           [this, reply, file, targetPath, onSuccess, onError, timer,

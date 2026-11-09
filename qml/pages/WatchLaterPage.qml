@@ -27,6 +27,7 @@ Rectangle {
     property bool deleteConfirmVisible: false
 
     signal backClicked()
+    signal homeRequested()
     signal videoSelected(string bvid)
 
     function resetPosition() {
@@ -63,6 +64,7 @@ Rectangle {
         showBack: true
         anchors.top: parent.top
         onBackClicked: watchLaterPage.backClicked()
+        onHomeClicked: watchLaterPage.homeRequested()
     }
 
     Connections {

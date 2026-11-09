@@ -16,6 +16,7 @@ Rectangle {
     property bool rankingModelAttached: false
 
     signal backClicked()
+    signal homeRequested()
     signal videoSelected(string bvid)
 
     function contentXValue() {
@@ -48,6 +49,7 @@ Rectangle {
         showBack: true
         anchors.top: parent.top
         onBackClicked: rankingPage.backClicked()
+        onHomeClicked: rankingPage.homeRequested()
     }
 
     // ── 分区标签 ──

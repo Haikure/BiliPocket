@@ -34,7 +34,11 @@ Rectangle {
     property alias edgeProgressHeight: player.progressBarHeight
     readonly property bool swipeSeeking: gestureArea.pressed && gestureArea.gestureValid && gestureArea.dragMode === 1
     readonly property bool previewSeeking: swipeSeeking || seekMouseArea.pressed
-    readonly property real displayedPosition: previewSeeking ? seekPreviewPosition : player.position
+    property real initialPosition: 0
+    property real initialDuration: 0
+    readonly property real displayedPosition: previewSeeking ? seekPreviewPosition
+            : (!sessionActive ? initialPosition : resumePending ? resumePosition : player.position)
+    readonly property real displayedDuration: player.duration > 0 && sessionActive ? player.duration : initialDuration
     property bool osdVisible: true
     property bool hideOsdAfterPlaybackStarts: false
     readonly property bool controlPressed: gestureArea.pressed || seekMouseArea.pressed || resetZoomButton.pressed ||
@@ -77,10 +81,11 @@ Rectangle {
         resumePending = resumePosition > 0
         sessionActive = true
         resetZoom()
-        player.open(videoUrl, audioUrl, {
+        var headers = /^https?:/i.test(String(videoUrl)) ? {
             "Referer": "https://www.bilibili.com/",
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        })
+        } : ({})
+        player.open(videoUrl, audioUrl, headers)
         showOsdForPlayback(true)
     }
 
@@ -312,7 +317,7 @@ Rectangle {
             id: gestureArea
             objectName: "gestureArea"
             anchors.fill: parent
-            enabled: player.enabled && !player.loading && !app.zoomMode
+            enabled: !app.zoomMode
             pressAndHoldInterval: 400
             property bool held: false
             property bool moved: false
@@ -360,7 +365,7 @@ Rectangle {
                         return
                     }
                     if (dragMode === 0) {
-                        if (dx > dy * 1.25 && player.duration > 0 &&
+                        if (dx > dy * 1.25 && !player.loading && player.duration > 0 &&
                                 (player.playbackState === FFmpegPlayer.VideoPlayer.PlayingState ||
                                  player.playbackState === FFmpegPlayer.VideoPlayer.PausedState))
                             dragMode = 1
@@ -712,8 +717,8 @@ Rectangle {
                     Rectangle {
                         anchors.left: parent.left
                         anchors.verticalCenter: parent.verticalCenter
-                        width: player.duration > 0
-                               ? parent.width * Math.max(0, Math.min(1, app.displayedPosition / player.duration))
+                        width: app.displayedDuration > 0
+                               ? parent.width * Math.max(0, Math.min(1, app.displayedPosition / app.displayedDuration))
                                : 0
                         height: 3
                         radius: 2
@@ -726,8 +731,8 @@ Rectangle {
                         radius: 4
                         y: (parent.height - height) / 2
                         x: {
-                            var fraction = player.duration > 0
-                                    ? Math.max(0, Math.min(1, app.displayedPosition / player.duration))
+                            var fraction = app.displayedDuration > 0
+                                    ? Math.max(0, Math.min(1, app.displayedPosition / app.displayedDuration))
                                     : 0
                             return Math.max(0, Math.min(parent.width - width, fraction * parent.width - width / 2))
                         }
@@ -753,7 +758,7 @@ Rectangle {
                     anchors.right: parent.right
                     anchors.verticalCenter: parent.verticalCenter
                     width: 42
-                    text: app.formatTime(player.duration)
+                    text: app.formatTime(app.displayedDuration)
                     color: "#e6eaf0"
                     font.pixelSize: 10
                     font.family: "monospace"

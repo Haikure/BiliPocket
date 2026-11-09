@@ -27,6 +27,7 @@ Rectangle {
     readonly property bool sortBusy: seasonModel ? seasonModel.loading : false
 
     signal backClicked()
+    signal homeRequested()
     signal videoSelected(string bvid)
 
     function totalText() {
@@ -148,18 +149,20 @@ Rectangle {
         title: seasonTitle.length > 0 ? seasonTitle : "合集"
         titleSuffix: seasonPage.totalText()
         showBack: true
-        titleSideReserve: 90
+        titleSideReserve: 76
+        titleRightReserve: 108
         anchors.top: parent.top
         onBackClicked: seasonPage.backClicked()
+        onHomeClicked: seasonPage.homeRequested()
     }
 
     Rectangle {
         id: sortTitleButton
-        width: 42
+        width: 32
         height: titleBar.height
         anchors.top: titleBar.top
         anchors.right: titleBar.right
-        anchors.rightMargin: 6
+        anchors.rightMargin: 40
         color: "transparent"
         z: titleBar.z + 1
         opacity: seasonPage.sortBusy ? 0.55 : 1.0
@@ -229,7 +232,7 @@ Rectangle {
 
     Rectangle {
         id: locateTitleButton
-        width: 42
+        width: 32
         height: titleBar.height
         anchors.top: titleBar.top
         anchors.right: sortTitleButton.left
@@ -241,7 +244,7 @@ Rectangle {
         Canvas {
             id: locateTitleCanvas
             anchors.centerIn: parent
-            anchors.horizontalCenterOffset: 5
+            anchors.horizontalCenterOffset: 0
             width: 30
             height: 24
 
